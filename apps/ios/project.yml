@@ -1,0 +1,17 @@
+name: Midas
+options:
+  minimumXcodeGenVersion: 2.42.0
+targets:
+  Midas:
+    type: application
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: Midas
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.clarkmyfancy.midas
+        SWIFT_VERSION: "5.10"
+        PRODUCT_NAME: Midas
+        INFOPLIST_FILE: Midas/Info.plist
+

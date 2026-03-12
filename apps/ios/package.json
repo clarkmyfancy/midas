@@ -1,0 +1,9 @@
+{
+  "name": "@midas/ios",
+  "private": true,
+  "scripts": {
+    "project:generate": "xcodegen generate",
+    "dev": "echo 'Open apps/ios in Xcode to run the SwiftUI app.'"
+  }
+}
+

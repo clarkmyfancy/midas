@@ -1,0 +1,11 @@
+{
+  "name": "@midas/backend",
+  "private": true,
+  "scripts": {
+    "dev": "uv run uvicorn app.main:app --reload",
+    "test": "uv run pytest",
+    "typecheck": "uv run python -m compileall app tests scripts",
+    "generate:types": "uv run python scripts/generate_types.py"
+  }
+}
+

@@ -1,0 +1,9 @@
+{
+  "name": "@midas/types",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "types": "./src/index.ts"
+}
+
