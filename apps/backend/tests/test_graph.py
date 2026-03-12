@@ -10,6 +10,6 @@ def test_reflection_workflow_returns_summary_and_trace() -> None:
         )
     )
 
-    assert "Midas detected the following themes" in result.summary
+    assert "detected the following themes" in result.summary
     assert result.findings
     assert len(result.trace) == 2

@@ -54,37 +54,50 @@ The current monorepo is structured around a staff-level systems blueprint.
 
 Midas is intended to support an open-source core with commercial upside.
 
-- Keep the core local-first iOS, web, and backend platform public
-- Generate and share contracts across the monorepo to maximize development speed
-- Keep proprietary "Pro" agents and premium orchestration logic in a separate private repository
-- Support hosted offerings, premium features, and App Store monetization on top of the public core
+- Keep the core local-first iOS, web, and backend platform public.
+- Generate and share contracts across the monorepo to maximize development speed.
+- Keep proprietary `midas-pro` agents and premium orchestration logic in a separate private repository.
+- Support hosted offerings, premium features, and App Store monetization on top of the public core.
 
 The repository structure decision is documented in [docs/adr/001-repository-structure.md](docs/adr/001-repository-structure.md).
 
-## Implementation Roadmap
+## Capability Boundary
 
-### Phase 1: Synthetic testing
+The backend now implements an explicit open-core boundary.
 
-Generate 90 days of synthetic journal and HealthKit-style data to test the habit analysis loop safely before using personal data.
+- Public interfaces live under `apps/backend/midas/interfaces`.
+- Active implementations are selected through the capability registry in `apps/backend/midas/core/registry.py`.
+- `apps/backend/midas/core/loader.py` attempts to load `midas_pro` and falls back to Core implementations when that package is absent.
+- Runtime entitlements are checked through a mock Polar-compatible guard in `apps/backend/midas/core/entitlements.py`.
+- `GET /api/v1/capabilities` returns the feature map consumed by the web and iOS clients.
 
-### Phase 2: Security sandbox
-
-Run agent workflows in isolated environments for imported file analysis and higher-trust execution boundaries.
-
-### Phase 3: Personal pivot
-
-Replace synthetic data with real personal data and document the transition from development to a trusted production-grade personal system.
+This keeps the public repo fully runnable in Core mode while preserving a clean injection path for private Pro packages later.
 
 ## Repository Structure
 
 - `apps/backend`: FastAPI service orchestrating agent workflows with LangGraph
-- `apps/web`: Next.js dashboard consuming shared contracts
-- `apps/ios`: SwiftUI starter app for the mobile client
+- `apps/web`: Next.js dashboard consuming shared contracts and capability gates
+- `apps/ios`: SwiftUI starter app with a Pro-gated view helper
 - `packages/config`: shared TypeScript configuration
 - `packages/types`: generated TypeScript types derived from backend Pydantic models
 - `docs/adr`: architecture decision records
 
 See [PROJECT_SPEC.md](PROJECT_SPEC.md) for the fuller high-level problem specification.
+
+## Prerequisites
+
+- `uv`
+- `pnpm`
+- `xcodegen`
+- Python `3.13`
+- Xcode command line tools / Xcode for iOS builds
+
+On macOS with Homebrew:
+
+```bash
+brew install uv pnpm xcodegen
+uv python install 3.13
+```
 
 ## Getting Started
 
@@ -100,7 +113,7 @@ pnpm dev
 
 ```bash
 cd apps/backend
-uv sync
+uv sync --python 3.13
 uv run uvicorn app.main:app --reload
 ```
 
@@ -109,4 +122,30 @@ uv run uvicorn app.main:app --reload
 ```bash
 cd apps/ios
 xcodegen generate
+open Midas.xcodeproj
 ```
+
+## Verification
+
+These commands were run successfully against the current repository state:
+
+```bash
+cd apps/backend
+uv sync --python 3.13
+uv run pytest
+uv run python -c "from fastapi.testclient import TestClient; from app.main import app; client = TestClient(app); print(client.get('/api/v1/capabilities').json())"
+```
+
+```bash
+pnpm install
+pnpm --filter @midas/web typecheck
+pnpm --filter @midas/web build
+pnpm generate:types
+```
+
+```bash
+cd apps/ios
+xcodegen generate
+xcodebuild -project Midas.xcodeproj -scheme Midas -sdk iphonesimulator -derivedDataPath .derived-data CODE_SIGNING_ALLOWED=NO build
+```
+

@@ -78,6 +78,46 @@ h2 {
   box-shadow: var(--shadow);
 }
 
+.gate-panel {
+  margin-top: 24px;
+}
+
+.feature-lock,
+.feature-unlocked {
+  border-radius: 18px;
+  padding: 20px;
+  background: rgba(244, 237, 229, 0.92);
+  border: 1px solid rgba(27, 20, 15, 0.08);
+}
+
+.feature-lock h3,
+.feature-unlocked h3 {
+  margin-top: 0;
+}
+
+.feature-badge {
+  display: inline-block;
+  margin-bottom: 12px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(183, 106, 47, 0.14);
+  color: var(--accent);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.feature-lock button {
+  border: 0;
+  border-radius: 999px;
+  padding: 12px 18px;
+  background: var(--accent);
+  color: #fff9f4;
+  font: inherit;
+  cursor: pointer;
+}
+
 pre {
   overflow-x: auto;
   border-radius: 16px;
@@ -100,4 +140,3 @@ code {
     padding: 20px;
   }
 }
-

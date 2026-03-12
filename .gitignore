@@ -3,7 +3,9 @@
 .pytest_cache
 .turbo
 .venv
+.derived-data
+*.tsbuildinfo
+*.xcodeproj
 node_modules
 __pycache__
 *.pyc
-

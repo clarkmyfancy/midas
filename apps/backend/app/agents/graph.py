@@ -5,8 +5,9 @@ from langgraph.graph import END, START, StateGraph
 from typing_extensions import TypedDict
 
 from app.agents.habit_analyst import HabitAnalystAgent
-from app.agents.reflection_coach import ReflectionCoachAgent
 from app.schemas.reflection import ReflectionRequest, ReflectionResponse
+from midas.core.loader import load_capabilities
+from midas.interfaces.agents import ReflectionCoachInterface
 
 
 class ReflectionState(TypedDict):
@@ -20,7 +21,8 @@ class ReflectionState(TypedDict):
 def build_reflection_graph():
     workflow = StateGraph(ReflectionState)
     habit_analyst = HabitAnalystAgent()
-    reflection_coach = ReflectionCoachAgent()
+    registry = load_capabilities()
+    reflection_coach = registry.resolve(ReflectionCoachInterface)
 
     workflow.add_node(habit_analyst.name, habit_analyst.run)
     workflow.add_node(reflection_coach.name, reflection_coach.run)
@@ -48,4 +50,3 @@ def run_reflection_workflow(payload: ReflectionRequest) -> ReflectionResponse:
         findings=result["findings"],
         trace=result["trace"],
     )
-
