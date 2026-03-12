@@ -18,6 +18,7 @@ FastAPI backend for the Midas multi-agent AI system.
 - The service is expected to run in Core mode when `midas_pro` is not installed.
 - `GET /api/v1/capabilities` exposes the capability map used by the clients.
 - `GET /api/v1/pro/analytics` is guarded by `requires_entitlement("pro_analytics")`.
+- Open-core planning and boundary enforcement are documented in `docs/adr/007` and `docs/adr/011`.
 
 ## Getting Started
 
@@ -45,9 +46,14 @@ pnpm generate:types
 uv run pytest
 ```
 
+From the repository root, the publish guard runs the same automated suite via:
+
+```bash
+sh .codex/skills/midas-publish-guard/scripts/run_publish_checks.sh
+```
+
 ## Smoke Check
 
 ```bash
 uv run python -c "from fastapi.testclient import TestClient; from app.main import app; client = TestClient(app); print(client.get('/health').json()); print(client.get('/api/v1/capabilities').json())"
 ```
-

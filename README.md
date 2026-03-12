@@ -84,6 +84,24 @@ This keeps the public repo fully runnable in Core mode while preserving a clean 
 
 See [PROJECT_SPEC.md](PROJECT_SPEC.md) for the fuller high-level problem specification.
 
+## Codex Guardrails
+
+This repository now includes local Codex skills under `.codex/skills` to keep architecture and release work consistent.
+
+- `midas-architect`: enforce the open-core boundary before implementation begins
+- `agent-evaluator`: define judge-based evaluation workflows for agent behavior
+- `secure-sandboxing`: standardize E2B plus Presidio handling for sensitive analysis
+- `type-safe-contracts`: regenerate and validate shared contracts after schema changes
+- `midas-publish-guard`: run the current automated test suite before pushing branches or updating `main`
+
+The current pre-push command is:
+
+```bash
+sh .codex/skills/midas-publish-guard/scripts/run_publish_checks.sh
+```
+
+The corresponding architectural decisions are documented in `docs/adr/011` through `docs/adr/015`.
+
 ## Prerequisites
 
 - `uv`
@@ -149,3 +167,8 @@ xcodegen generate
 xcodebuild -project Midas.xcodeproj -scheme Midas -sdk iphonesimulator -derivedDataPath .derived-data CODE_SIGNING_ALLOWED=NO build
 ```
 
+Before publishing new code to a remote, run:
+
+```bash
+sh .codex/skills/midas-publish-guard/scripts/run_publish_checks.sh
+```
