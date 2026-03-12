@@ -1,0 +1,4 @@
+interface:
+  display_name: "Midas Architect"
+  short_description: "Protect the open-core boundary"
+  default_prompt: "Use $midas-architect when adding or changing Midas capabilities."

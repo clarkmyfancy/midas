@@ -1,0 +1,4 @@
+interface:
+  display_name: "Secure Sandboxing"
+  short_description: "Handle sandboxed PII-safe workloads"
+  default_prompt: "Use $secure-sandboxing when Midas needs isolated code execution for sensitive data."

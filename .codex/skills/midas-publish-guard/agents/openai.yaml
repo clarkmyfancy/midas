@@ -1,0 +1,4 @@
+interface:
+  display_name: "Midas Publish Guard"
+  short_description: "Run tests before push or publish"
+  default_prompt: "Use $midas-publish-guard before pushing a Midas branch or updating main."

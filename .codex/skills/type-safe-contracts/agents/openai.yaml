@@ -1,0 +1,4 @@
+interface:
+  display_name: "Type-Safe Contracts"
+  short_description: "Regenerate shared API contracts"
+  default_prompt: "Use $type-safe-contracts after changing backend schemas or shared contracts in Midas."

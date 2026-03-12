@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agent Evaluator"
+  short_description: "Run judge-based agent evals"
+  default_prompt: "Use $agent-evaluator to evaluate Midas agent behavior with a scoring rubric."
