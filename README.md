@@ -102,13 +102,23 @@ sh .codex/skills/midas-publish-guard/scripts/run_publish_checks.sh
 
 The corresponding architectural decisions are documented in `docs/adr/011` through `docs/adr/015`.
 
-## Prerequisites
+## Local Onboarding
+
+This section is the fastest way to get the full local site running and inspectable on a fresh machine.
+
+### 1. Prerequisites
+
+Required:
 
 - `uv`
 - `pnpm`
-- `xcodegen`
 - Python `3.13`
-- Xcode command line tools / Xcode for iOS builds
+- Docker Desktop or another running Docker daemon
+
+Optional:
+
+- `xcodegen`
+- Xcode command line tools / full Xcode for the iOS app
 
 On macOS with Homebrew:
 
@@ -117,25 +127,131 @@ brew install uv pnpm xcodegen
 uv python install 3.13
 ```
 
-## Getting Started
+### 2. Clone and install dependencies
 
-### JavaScript workspace
+From the repository root:
 
 ```bash
+cd /Users/bronzeage/Desktop/Areas/🌎\ Thrivemind/Areas/Apps/Midas
 pnpm install
-pnpm generate:types
-pnpm dev
 ```
 
-### Backend
+### 3. Create the backend environment file
+
+Create `apps/backend/.env` from the checked-in example:
+
+```bash
+cp apps/backend/.env.example apps/backend/.env
+```
+
+The default local values in `apps/backend/.env.example` already point at the local Docker services.
+
+Important variables:
+
+- `OPENAI_API_KEY`
+  - Required if you want live reflection generation through the OpenAI-backed habit analyst.
+  - Without it, the memory projection system can still run, but live reflection/chat quality will be limited or fail where OpenAI is required.
+- `MIDAS_AUTO_PROJECT`
+  - `0` means journal entries queue projection jobs and you run them manually from the Memory page.
+  - `1` means the backend will try to run projections automatically after entry creation.
+
+If you want live model responses, edit `apps/backend/.env` and set:
+
+```bash
+OPENAI_API_KEY="your_key_here"
+```
+
+### 4. Start Docker Desktop
+
+Start Docker Desktop before trying to boot the memory services:
+
+```bash
+open -a "Docker"
+```
+
+Wait for Docker to finish starting, then confirm the daemon is healthy:
+
+```bash
+docker info
+```
+
+### 5. Start the local data services
+
+From the repository root:
+
+```bash
+pnpm memory:up
+```
+
+This starts:
+
+- Postgres on `localhost:5432`
+- Weaviate on `localhost:8080`
+- Neo4j on `localhost:7474` and `localhost:7687`
+
+Neo4j local credentials:
+
+- Username: `neo4j`
+- Password: `midasdevpassword`
+
+### 6. Start the local site
+
+From the repository root:
+
+```bash
+pnpm dev:site
+```
+
+This runs:
+
+- FastAPI backend
+- Next.js web app
+
+### 7. Open the local surfaces
+
+Once the dev servers are up, open:
+
+- Web app: `http://localhost:3000`
+- Memory inspector: `http://localhost:3000/memory`
+- Backend OpenAPI docs: `http://127.0.0.1:8000/docs`
+- Neo4j Browser: `http://localhost:7474/browser/`
+- Weaviate schema: `http://localhost:8080/v1/schema`
+- Weaviate objects: `http://localhost:8080/v1/objects`
+
+### 8. First-run workflow
+
+After the app is running:
+
+1. Open `http://localhost:3000/login`
+2. Register a local account
+3. Open `http://localhost:3000`
+4. If you want to inspect storage internals, open `http://localhost:3000/memory`
+5. Create a journal entry from the Memory page
+6. Run projection jobs from the Memory page
+7. Inspect:
+   - canonical journal record
+   - queued/completed projection jobs
+   - Weaviate artifacts
+   - Neo4j observation graph
+
+## Alternative Local Commands
+
+### Run backend only
 
 ```bash
 cd apps/backend
 uv sync --python 3.13
-uv run uvicorn app.main:app --reload
+env UV_CACHE_DIR=/tmp/uv-cache uv run uvicorn app.main:app --reload
 ```
 
-### iOS
+### Run web only
+
+```bash
+cd /Users/bronzeage/Desktop/Areas/🌎\ Thrivemind/Areas/Apps/Midas
+pnpm --filter @midas/web dev
+```
+
+### Run iOS app
 
 ```bash
 cd apps/ios
@@ -147,25 +263,70 @@ open Midas.xcodeproj
 
 These commands were run successfully against the current repository state:
 
-```bash
-cd apps/backend
-uv sync --python 3.13
-uv run pytest
-uv run python -c "from fastapi.testclient import TestClient; from app.main import app; client = TestClient(app); print(client.get('/api/v1/capabilities').json())"
-```
+### Backend
 
 ```bash
-pnpm install
-pnpm --filter @midas/web typecheck
-pnpm --filter @midas/web build
-pnpm generate:types
+cd apps/backend
+env UV_CACHE_DIR=/tmp/uv-cache uv run pytest
+env UV_CACHE_DIR=/tmp/uv-cache uv run python -m compileall app tests scripts midas
 ```
+
+### Web
+
+```bash
+cd /Users/bronzeage/Desktop/Areas/🌎\ Thrivemind/Areas/Apps/Midas
+pnpm generate:types
+pnpm --filter @midas/web build
+pnpm --filter @midas/web typecheck
+```
+
+### iOS
 
 ```bash
 cd apps/ios
 xcodegen generate
 xcodebuild -project Midas.xcodeproj -scheme Midas -sdk iphonesimulator -derivedDataPath .derived-data CODE_SIGNING_ALLOWED=NO build
 ```
+
+## Troubleshooting
+
+### `pnpm memory:up` says the Docker daemon is not running
+
+Start Docker Desktop:
+
+```bash
+open -a "Docker"
+docker info
+```
+
+Then rerun:
+
+```bash
+pnpm memory:up
+```
+
+### Backend errors mention missing Postgres columns like `completed_at`
+
+This means your local Postgres table was created before the latest schema fields were added. Restart the backend so it can run the lightweight startup migration:
+
+```bash
+pnpm dev:site
+```
+
+If the backend was already running, stop it and start it again.
+
+### Web typecheck fails because `.next/types` files are missing
+
+Build the web app first, then rerun typecheck:
+
+```bash
+pnpm --filter @midas/web build
+pnpm --filter @midas/web typecheck
+```
+
+### Reflection/chat is up but the model is not responding
+
+Check that `OPENAI_API_KEY` is set in `apps/backend/.env`, then restart the backend.
 
 Before publishing new code to a remote, run:
 

@@ -5,6 +5,7 @@
   "scripts": {
     "build": "turbo run build",
     "dev": "turbo run dev --parallel",
+    "dev:site": "turbo run dev --parallel --filter @midas/backend --filter @midas/web",
     "memory:up": "sh scripts/start_memory_stack.sh",
     "test": "turbo run test",
     "typecheck": "turbo run typecheck",

@@ -292,6 +292,18 @@ class PostgresMemoryStore(MemoryStore):
             )
             cur.execute(
                 """
+                ALTER TABLE memory_projection_jobs
+                ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE memory_projection_jobs
+                ADD COLUMN IF NOT EXISTS last_error TEXT
+                """
+            )
+            cur.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_memory_projection_jobs_user_source
                 ON memory_projection_jobs (user_id, source_record_id, created_at DESC)
                 """

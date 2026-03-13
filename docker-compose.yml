@@ -37,7 +37,7 @@ services:
       retries: 10
 
   neo4j:
-    image: neo4j:5.28-community
+    image: neo4j:5.26.22-community
     container_name: midas-neo4j
     restart: unless-stopped
     ports:
