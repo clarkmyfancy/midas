@@ -7,6 +7,20 @@ from app.schemas.auth import (
     AuthUserResponse,
 )
 from app.schemas.capabilities import CapabilityMapResponse
+from app.schemas.journal import (
+    JournalEntryCreateRequest,
+    JournalEntryListResponse,
+    JournalEntryResponse,
+    JournalIngestResponse,
+    MemoryDebugResponse,
+    GraphNodeResponse,
+    GraphObservationResponse,
+    GraphRelationshipResponse,
+    ProjectionJobListResponse,
+    ProjectionJobResponse,
+    ProjectionRunResponse,
+    WeaviateArtifactResponse,
+)
 from app.schemas.reflection import ReflectionRequest, ReflectionResponse
 
 SCHEMA_MODELS = [
@@ -17,6 +31,18 @@ SCHEMA_MODELS = [
     AuthLoginRequest,
     AuthUserResponse,
     AuthTokenResponse,
+    JournalEntryCreateRequest,
+    JournalEntryResponse,
+    ProjectionJobResponse,
+    JournalIngestResponse,
+    JournalEntryListResponse,
+    ProjectionJobListResponse,
+    ProjectionRunResponse,
+    WeaviateArtifactResponse,
+    GraphNodeResponse,
+    GraphRelationshipResponse,
+    GraphObservationResponse,
+    MemoryDebugResponse,
 ]
 
 __all__ = [
@@ -25,6 +51,18 @@ __all__ = [
     "AuthTokenResponse",
     "AuthUserResponse",
     "CapabilityMapResponse",
+    "JournalEntryCreateRequest",
+    "JournalEntryListResponse",
+    "JournalEntryResponse",
+    "JournalIngestResponse",
+    "MemoryDebugResponse",
+    "GraphNodeResponse",
+    "GraphObservationResponse",
+    "GraphRelationshipResponse",
+    "ProjectionJobListResponse",
+    "ProjectionJobResponse",
+    "ProjectionRunResponse",
+    "WeaviateArtifactResponse",
     "ReflectionRequest",
     "ReflectionResponse",
     "SCHEMA_MODELS",

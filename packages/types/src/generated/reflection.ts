@@ -27,6 +27,91 @@ export interface CapabilityMapResponse {
   capabilities: Record<string, boolean>;
 }
 
+export interface GraphNodeResponse {
+  node_id: string;
+  labels: string[];
+  properties: Record<string, unknown>;
+}
+
+export interface GraphObservationResponse {
+  observation?: GraphNodeResponse | null;
+  nodes: GraphNodeResponse[];
+  relationships: GraphRelationshipResponse[];
+  cypher_browser_url?: string | null;
+}
+
+export interface GraphRelationshipResponse {
+  relationship_id: string;
+  type: string;
+  start_node_id: string;
+  end_node_id: string;
+  properties: Record<string, unknown>;
+}
+
+export interface JournalEntryCreateRequest {
+  journal_entry: string;
+  goals?: string[];
+  thread_id?: string | null;
+  steps?: number | null;
+  sleep_hours?: number | null;
+  hrv_ms?: number | null;
+  source?: string;
+}
+
+export interface JournalEntryListResponse {
+  entries: JournalEntryResponse[];
+}
+
+export interface JournalEntryResponse {
+  id: string;
+  user_id: string;
+  journal_entry: string;
+  goals: string[];
+  thread_id: string | null;
+  steps: number | null;
+  sleep_hours: number | null;
+  hrv_ms: number | null;
+  source: string;
+  created_at: string;
+}
+
+export interface JournalIngestResponse {
+  entry: JournalEntryResponse;
+  projection_jobs: ProjectionJobResponse[];
+}
+
+export interface MemoryDebugResponse {
+  entry: JournalEntryResponse;
+  projection_jobs: ProjectionJobResponse[];
+  weaviate_artifacts: WeaviateArtifactResponse[];
+  graph: GraphObservationResponse;
+  links: Record<string, string>;
+}
+
+export interface ProjectionJobListResponse {
+  projection_jobs: ProjectionJobResponse[];
+}
+
+export interface ProjectionJobResponse {
+  id: string;
+  user_id: string;
+  source_record_id: string;
+  source_record_type: string;
+  projection_type: string;
+  status: string;
+  attempts: number;
+  created_at: string;
+  completed_at: string | null;
+  last_error: string | null;
+}
+
+export interface ProjectionRunResponse {
+  claimed_jobs: number;
+  completed_jobs: number;
+  failed_jobs: number;
+  jobs: ProjectionJobResponse[];
+}
+
 export interface ReflectionRequest {
   journal_entry: string;
   goals?: string[];
@@ -40,4 +125,13 @@ export interface ReflectionResponse {
   summary: string;
   findings: string[];
   trace: string[];
+}
+
+export interface WeaviateArtifactResponse {
+  projection_job_id: string;
+  object_id: string;
+  class_name: string;
+  content?: string | null;
+  url?: string | null;
+  raw?: Record<string, unknown> | null;
 }

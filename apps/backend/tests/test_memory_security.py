@@ -1,0 +1,66 @@
+from fastapi.testclient import TestClient
+
+from app.main import app
+
+
+client = TestClient(app)
+
+
+def register_user(email: str) -> str:
+    response = client.post(
+        "/v1/auth/register",
+        json={"email": email, "password": "supersecret"},
+    )
+    assert response.status_code == 200
+    return response.json()["access_token"]
+
+
+def create_entry(access_token: str, text: str) -> str:
+    response = client.post(
+        "/v1/journal-entries",
+        json={"journal_entry": text, "goals": []},
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert response.status_code == 200
+    return response.json()["entry"]["id"]
+
+
+def test_user_cannot_read_another_users_journal_entry_or_jobs() -> None:
+    owner_token = register_user("owner@example.com")
+    viewer_token = register_user("viewer@example.com")
+    entry_id = create_entry(owner_token, "Private journal entry.")
+
+    entry_response = client.get(
+        f"/v1/journal-entries/{entry_id}",
+        headers={"Authorization": f"Bearer {viewer_token}"},
+    )
+    jobs_response = client.get(
+        f"/v1/journal-entries/{entry_id}/projection-jobs",
+        headers={"Authorization": f"Bearer {viewer_token}"},
+    )
+
+    assert entry_response.status_code == 404
+    assert jobs_response.status_code == 404
+
+
+def test_list_endpoint_only_returns_current_users_entries() -> None:
+    first_token = register_user("first@example.com")
+    second_token = register_user("second@example.com")
+    create_entry(first_token, "First user entry.")
+    create_entry(second_token, "Second user entry.")
+
+    first_response = client.get(
+        "/v1/journal-entries",
+        headers={"Authorization": f"Bearer {first_token}"},
+    )
+    second_response = client.get(
+        "/v1/journal-entries",
+        headers={"Authorization": f"Bearer {second_token}"},
+    )
+
+    assert [entry["journal_entry"] for entry in first_response.json()["entries"]] == [
+        "First user entry."
+    ]
+    assert [entry["journal_entry"] for entry in second_response.json()["entries"]] == [
+        "Second user entry."
+    ]

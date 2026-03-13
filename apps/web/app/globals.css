@@ -53,6 +53,29 @@ body {
   margin-bottom: 18px;
 }
 
+.app-switcher {
+  margin-right: auto;
+  display: flex;
+  gap: 10px;
+}
+
+.app-toggle {
+  display: inline-flex;
+  align-items: center;
+  padding: 10px 16px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.58);
+  color: var(--text);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.app-toggle-active {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
 .nav-links,
 .auth-controls,
 .hero-actions,
@@ -357,6 +380,100 @@ h2 {
   background: var(--surface-strong);
   color: var(--text);
   font: inherit;
+}
+
+.memory-grid {
+  display: grid;
+  gap: 24px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.memory-compose-panel,
+.memory-links-panel,
+.memory-list-panel,
+.memory-jobs-panel,
+.memory-debug-panel {
+  min-height: 100%;
+}
+
+.memory-textarea {
+  min-height: 180px;
+  padding: 14px 16px;
+}
+
+.memory-actions,
+.memory-link-list {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.memory-status,
+.memory-empty,
+.memory-small-copy {
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.memory-entry-list,
+.memory-job-list {
+  display: grid;
+  gap: 12px;
+}
+
+.memory-entry {
+  display: grid;
+  gap: 6px;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--surface-strong);
+  color: var(--text);
+  padding: 16px;
+  cursor: pointer;
+}
+
+.memory-entry-active {
+  border-color: rgba(187, 92, 47, 0.45);
+  box-shadow: inset 0 0 0 1px rgba(187, 92, 47, 0.2);
+}
+
+.memory-job-card {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 14px 16px;
+  background: var(--surface-strong);
+}
+
+.memory-job-status {
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.memory-job-status-completed {
+  color: var(--success);
+}
+
+.memory-job-status-pending {
+  color: var(--accent-strong);
+}
+
+.memory-job-status-failed,
+.memory-job-error {
+  color: #8c1f1f;
+}
+
+.memory-pre {
+  overflow: auto;
+  border-radius: 18px;
+  background: rgba(32, 21, 15, 0.92);
+  color: #f8eee4;
+  padding: 18px;
+  font-size: 0.85rem;
+  line-height: 1.55;
 }
 
 .input {

@@ -5,6 +5,7 @@
   "scripts": {
     "build": "turbo run build",
     "dev": "turbo run dev --parallel",
+    "memory:up": "sh scripts/start_memory_stack.sh",
     "test": "turbo run test",
     "typecheck": "turbo run typecheck",
     "generate:types": "pnpm --filter @midas/backend generate:types"
@@ -14,4 +15,3 @@
     "typescript": "^5.8.2"
   }
 }
-

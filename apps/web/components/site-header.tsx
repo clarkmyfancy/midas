@@ -9,7 +9,7 @@ function navClassName(pathname: string, href: string) {
 
 export function SiteHeader() {
   const pathname = usePathname();
-  if (!pathname || !["/", "/reflect", "/profile", "/chat"].includes(pathname)) {
+  if (!pathname || !["/", "/reflect", "/profile", "/chat", "/memory"].includes(pathname)) {
     return null;
   }
 
@@ -18,6 +18,9 @@ export function SiteHeader() {
       <nav className="app-switcher" aria-label="Application">
         <Link className={navClassName(pathname, "/")} href="/">
           Reflect
+        </Link>
+        <Link className={navClassName(pathname, "/memory")} href="/memory">
+          Memory
         </Link>
       </nav>
 

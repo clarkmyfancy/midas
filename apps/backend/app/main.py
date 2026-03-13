@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator
 from typing import Annotated
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Header
+from fastapi import BackgroundTasks, Depends, FastAPI, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import HTTPException, status
 from fastapi.responses import StreamingResponse
@@ -23,6 +23,20 @@ from app.schemas.auth import (
     AuthUserResponse,
 )
 from app.schemas.capabilities import CapabilityMapResponse
+from app.schemas.journal import (
+    GraphNodeResponse,
+    GraphObservationResponse,
+    GraphRelationshipResponse,
+    JournalEntryCreateRequest,
+    JournalEntryListResponse,
+    JournalEntryResponse,
+    JournalIngestResponse,
+    MemoryDebugResponse,
+    ProjectionJobListResponse,
+    ProjectionJobResponse,
+    ProjectionRunResponse,
+    WeaviateArtifactResponse,
+)
 from app.schemas.reflection import ReflectionRequest
 from midas.core.entitlements import (
     AuthUser,
@@ -36,6 +50,19 @@ from midas.core.entitlements import (
     resolve_capabilities_for_user,
 )
 from midas.core.loader import load_capabilities
+from midas.core.memory import (
+    create_journal_entry_for_user,
+    get_journal_entry_for_user,
+    init_memory_storage,
+    list_journal_entries_for_user,
+    list_projection_jobs_for_user,
+)
+from midas.core.projections import (
+    GraphProjector,
+    VECTOR_CLASS_NAME,
+    WeaviateProjector,
+    process_pending_projection_jobs,
+)
 
 app = FastAPI(
     title="Midas API",
@@ -56,6 +83,65 @@ app.add_middleware(
 
 load_capabilities()
 init_auth_storage()
+init_memory_storage()
+
+
+def serialize_journal_entry(entry) -> JournalEntryResponse:
+    return JournalEntryResponse(
+        id=entry.id,
+        user_id=entry.user_id,
+        journal_entry=entry.journal_entry,
+        goals=entry.goals,
+        thread_id=entry.thread_id,
+        steps=entry.steps,
+        sleep_hours=entry.sleep_hours,
+        hrv_ms=entry.hrv_ms,
+        source=entry.source,
+        created_at=entry.created_at,
+    )
+
+
+def serialize_projection_job(job) -> ProjectionJobResponse:
+    return ProjectionJobResponse(
+        id=job.id,
+        user_id=job.user_id,
+        source_record_id=job.source_record_id,
+        source_record_type=job.source_record_type,
+        projection_type=job.projection_type,
+        status=job.status,
+        attempts=job.attempts,
+        created_at=job.created_at,
+        completed_at=job.completed_at,
+        last_error=job.last_error,
+    )
+
+
+def build_memory_links() -> dict[str, str]:
+    weaviate = WeaviateProjector()
+    graph = GraphProjector()
+    return {
+        "neo4j_browser": graph.browser_url(),
+        "weaviate_schema": f"{weaviate.base_url}/v1/schema",
+        "weaviate_objects": f"{weaviate.base_url}/v1/objects",
+    }
+
+
+def serialize_graph_node(node: dict[str, object]) -> GraphNodeResponse:
+    return GraphNodeResponse(
+        node_id=str(node.get("id", "")),
+        labels=[str(label) for label in node.get("labels", [])],
+        properties=dict(node.get("properties", {})),
+    )
+
+
+def serialize_graph_relationship(relationship: dict[str, object]) -> GraphRelationshipResponse:
+    return GraphRelationshipResponse(
+        relationship_id=str(relationship.get("id", "")),
+        type=str(relationship.get("type", "")),
+        start_node_id=str(relationship.get("startNode", "")),
+        end_node_id=str(relationship.get("endNode", "")),
+        properties=dict(relationship.get("properties", {})),
+    )
 
 
 async def stream_reflection_events(payload: ReflectionRequest) -> AsyncIterator[str]:
@@ -80,17 +166,185 @@ def healthcheck() -> dict[str, str]:
 @app.post("/api/v1/reflections")
 @app.post("/v1/reflections")
 async def create_reflection(
+    background_tasks: BackgroundTasks,
     payload: ReflectionRequest,
     user: Annotated[AuthUser, Depends(get_current_user)],
 ) -> StreamingResponse:
-    thread_suffix = payload.thread_id or "reflection"
+    stored_entry, _ = create_journal_entry_for_user(
+        user_id=user.id,
+        journal_entry=payload.journal_entry,
+        goals=payload.goals,
+        thread_id=payload.thread_id,
+        steps=payload.steps,
+        sleep_hours=payload.sleep_hours,
+        hrv_ms=payload.hrv_ms,
+        source="reflection_api",
+    )
+    thread_suffix = payload.thread_id or stored_entry.id
     resolved_payload = payload.model_copy(
         update={"thread_id": f"user:{user.id}:{thread_suffix}"}
     )
+    if os.getenv("MIDAS_AUTO_PROJECT", "0") == "1":
+        background_tasks.add_task(process_pending_projection_jobs, limit=10, user_id=user.id)
     return StreamingResponse(
         stream_reflection_events(resolved_payload),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache"},
+        background=background_tasks,
+    )
+
+
+@app.post("/api/v1/journal-entries", response_model=JournalIngestResponse)
+@app.post("/v1/journal-entries", response_model=JournalIngestResponse)
+def create_journal_entry(
+    background_tasks: BackgroundTasks,
+    payload: JournalEntryCreateRequest,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> JournalIngestResponse:
+    entry, projection_jobs = create_journal_entry_for_user(
+        user_id=user.id,
+        journal_entry=payload.journal_entry,
+        goals=payload.goals,
+        thread_id=payload.thread_id,
+        steps=payload.steps,
+        sleep_hours=payload.sleep_hours,
+        hrv_ms=payload.hrv_ms,
+        source=payload.source,
+    )
+    if os.getenv("MIDAS_AUTO_PROJECT", "0") == "1":
+        background_tasks.add_task(process_pending_projection_jobs, limit=10, user_id=user.id)
+    return JournalIngestResponse(
+        entry=serialize_journal_entry(entry),
+        projection_jobs=[serialize_projection_job(job) for job in projection_jobs],
+    )
+
+
+@app.get("/api/v1/journal-entries", response_model=JournalEntryListResponse)
+@app.get("/v1/journal-entries", response_model=JournalEntryListResponse)
+def list_journal_entries(
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> JournalEntryListResponse:
+    entries = list_journal_entries_for_user(user.id)
+    return JournalEntryListResponse(
+        entries=[serialize_journal_entry(entry) for entry in entries],
+    )
+
+
+@app.get("/api/v1/journal-entries/{entry_id}", response_model=JournalEntryResponse)
+@app.get("/v1/journal-entries/{entry_id}", response_model=JournalEntryResponse)
+def get_journal_entry(
+    entry_id: str,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> JournalEntryResponse:
+    entry = get_journal_entry_for_user(user.id, entry_id)
+    if entry is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Journal entry not found")
+    return serialize_journal_entry(entry)
+
+
+@app.get(
+    "/api/v1/journal-entries/{entry_id}/projection-jobs",
+    response_model=ProjectionJobListResponse,
+)
+@app.get(
+    "/v1/journal-entries/{entry_id}/projection-jobs",
+    response_model=ProjectionJobListResponse,
+)
+def list_projection_jobs(
+    entry_id: str,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> ProjectionJobListResponse:
+    entry = get_journal_entry_for_user(user.id, entry_id)
+    if entry is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Journal entry not found")
+
+    jobs = list_projection_jobs_for_user(user.id, source_record_id=entry_id)
+    return ProjectionJobListResponse(
+        projection_jobs=[serialize_projection_job(job) for job in jobs],
+    )
+
+
+@app.get("/api/v1/projection-jobs", response_model=ProjectionJobListResponse)
+@app.get("/v1/projection-jobs", response_model=ProjectionJobListResponse)
+def list_all_projection_jobs(
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> ProjectionJobListResponse:
+    jobs = list_projection_jobs_for_user(user.id)
+    return ProjectionJobListResponse(
+        projection_jobs=[serialize_projection_job(job) for job in jobs],
+    )
+
+
+@app.post("/api/v1/projection-jobs/run", response_model=ProjectionRunResponse)
+@app.post("/v1/projection-jobs/run", response_model=ProjectionRunResponse)
+def run_projection_jobs(
+    user: Annotated[AuthUser, Depends(get_current_user)],
+    limit: int = 20,
+) -> ProjectionRunResponse:
+    result = process_pending_projection_jobs(limit=limit, user_id=user.id)
+    return ProjectionRunResponse(
+        claimed_jobs=result.claimed_jobs,
+        completed_jobs=result.completed_jobs,
+        failed_jobs=result.failed_jobs,
+        jobs=[serialize_projection_job(job) for job in result.jobs],
+    )
+
+
+@app.get("/api/v1/journal-entries/{entry_id}/debug", response_model=MemoryDebugResponse)
+@app.get("/v1/journal-entries/{entry_id}/debug", response_model=MemoryDebugResponse)
+def debug_journal_entry(
+    entry_id: str,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> MemoryDebugResponse:
+    entry = get_journal_entry_for_user(user.id, entry_id)
+    if entry is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Journal entry not found")
+
+    jobs = list_projection_jobs_for_user(user.id, source_record_id=entry_id)
+    weaviate = WeaviateProjector()
+    graph = GraphProjector()
+    weaviate_artifacts: list[WeaviateArtifactResponse] = []
+    for job in jobs:
+        if not job.projection_type.startswith("weaviate_"):
+            continue
+        artifact = weaviate.fetch_object(job.id)
+        properties = artifact.get("properties", {}) if artifact else {}
+        weaviate_artifacts.append(
+            WeaviateArtifactResponse(
+                projection_job_id=job.id,
+                object_id=job.id,
+                class_name=str(artifact.get("class", "")) if artifact else VECTOR_CLASS_NAME,
+                content=str(properties.get("content")) if properties.get("content") is not None else None,
+                url=weaviate.object_url(job.id),
+                raw=artifact,
+            )
+        )
+
+    try:
+        graph_payload = graph.fetch_observation(entry.id, user.id)
+    except RuntimeError:
+        graph_payload = {"observation": None, "nodes": [], "relationships": []}
+
+    observation = graph_payload.get("observation")
+    return MemoryDebugResponse(
+        entry=serialize_journal_entry(entry),
+        projection_jobs=[serialize_projection_job(job) for job in jobs],
+        weaviate_artifacts=weaviate_artifacts,
+        graph=GraphObservationResponse(
+            observation=serialize_graph_node(observation) if isinstance(observation, dict) else None,
+            nodes=[
+                serialize_graph_node(node)
+                for node in graph_payload.get("nodes", [])
+                if isinstance(node, dict)
+            ],
+            relationships=[
+                serialize_graph_relationship(rel)
+                for rel in graph_payload.get("relationships", [])
+                if isinstance(rel, dict)
+            ],
+            cypher_browser_url=graph.browser_url(),
+        ),
+        links=build_memory_links(),
     )
 
 
