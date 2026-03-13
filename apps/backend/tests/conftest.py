@@ -1,6 +1,7 @@
 import pytest
 
 from langchain_core.messages import AIMessageChunk
+from midas.core.entitlements import reset_auth_storage_for_tests
 
 
 class FakeHabitAnalystChain:
@@ -15,6 +16,7 @@ class FakeHabitAnalystChain:
 
 @pytest.fixture(autouse=True)
 def stub_habit_analyst_chain(monkeypatch):
+    reset_auth_storage_for_tests()
     monkeypatch.setattr(
         "app.agents.graph.create_habit_analyst_chain",
         lambda _model: FakeHabitAnalystChain(),
