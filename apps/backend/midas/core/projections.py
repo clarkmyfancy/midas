@@ -15,6 +15,8 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from pydantic import BaseModel, Field
 
 from midas.core.memory import (
+    create_clarification_task_for_user,
+    get_alias_resolution_for_user,
     JournalEntryRecord,
     ProjectionJobRecord,
     get_journal_entry_for_user,
@@ -223,9 +225,25 @@ def display_name_from_canonical(value: str) -> str:
     return value.replace("_", " ").strip() or value
 
 
-def canonicalize_entity(entity_type: str, raw_name: str) -> tuple[str, list[str], bool, str | None]:
+def canonicalize_entity(
+    user_id: str,
+    entity_type: str,
+    raw_name: str,
+) -> tuple[str, list[str], bool, str | None]:
     cleaned = re.sub(r"\s+", " ", raw_name.strip())
     lowered = cleaned.lower()
+    resolution = get_alias_resolution_for_user(
+        user_id=user_id,
+        entity_type=entity_type,
+        raw_name=cleaned,
+    )
+    if resolution is not None:
+        return (
+            normalize_name(resolution.resolved_canonical_name),
+            [cleaned],
+            False,
+            f"Applied user clarification '{resolution.resolution}' for '{cleaned}'.",
+        )
     if entity_type == "person":
         tokens = [token for token in re.split(r"[\s\-]+", lowered) if token]
         if tokens:
@@ -416,6 +434,7 @@ def heuristic_extract_graph(entry: JournalEntryRecord) -> GraphExtraction:
         resolution_notes: str | None = None,
     ) -> ExtractedEntity:
         canonical_name, aliases, canonical_needs_clarification, canonical_note = canonicalize_entity(
+            entry.user_id,
             entity_type,
             name,
         )
@@ -694,8 +713,28 @@ class GraphProjector:
         return llm.invoke(prompt)
 
     def project(self, job: ProjectionJobRecord, entry: JournalEntryRecord) -> None:
-        self.ensure_schema()
         extraction = self.extract(entry)
+        for entity in extraction.entities:
+            if not entity.needs_clarification or not entity.aliases:
+                continue
+            alias_candidates = [alias for alias in entity.aliases if normalize_name(alias) != entity.canonical_name]
+            raw_name = alias_candidates[0] if alias_candidates else entity.aliases[0]
+            create_clarification_task_for_user(
+                user_id=entry.user_id,
+                source_record_id=entry.id,
+                entity_type=entity.entity_type,
+                raw_name=raw_name,
+                candidate_canonical_name=entity.canonical_name,
+                prompt=(
+                    f"Does '{raw_name}' refer to '{entity.name}' in this entry, "
+                    f"or should it stay separate?"
+                ),
+                options=["confirm_merge", "keep_separate", "dismiss"],
+                confidence=entity.confidence,
+                evidence=entity.evidence,
+            )
+
+        self.ensure_schema()
         observation_id = job.id
         self._query(
             """

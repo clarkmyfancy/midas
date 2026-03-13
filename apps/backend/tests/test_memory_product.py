@@ -81,3 +81,30 @@ def test_debug_payload_exposes_memory_settings() -> None:
     assert debug_response.status_code == 200
     assert "settings" in debug_response.json()
     assert debug_response.json()["settings"]["auto_project_enabled"] in {True, False}
+
+
+def test_clarification_task_contains_user_facing_prompt(monkeypatch) -> None:
+    monkeypatch.setenv("MIDAS_AUTO_PROJECT", "0")
+    access_token = register_user("clarification-product@example.com")
+
+    create_response = client.post(
+        "/v1/journal-entries",
+        json={"journal_entry": "Josh and I debriefed after the standup.", "goals": []},
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert create_response.status_code == 200
+
+    run_response = client.post(
+        "/v1/projection-jobs/run?limit=10",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert run_response.status_code == 200
+
+    clarifications_response = client.get(
+        "/v1/clarifications",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert clarifications_response.status_code == 200
+    task = clarifications_response.json()["tasks"][0]
+    assert "Does 'Josh' refer to" in task["prompt"]
+    assert task["options"] == ["confirm_merge", "keep_separate", "dismiss"]

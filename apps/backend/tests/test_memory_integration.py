@@ -104,3 +104,43 @@ def test_delete_endpoint_removes_canonical_entry() -> None:
     )
     assert get_response.status_code == 404
     assert list_response.json()["entries"] == []
+
+
+def test_clarification_resolution_round_trip() -> None:
+    access_token = register_user("clarification-integration@example.com")
+
+    create_response = client.post(
+        "/v1/journal-entries",
+        json={"journal_entry": "Josh joined me after the presentation.", "goals": []},
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert create_response.status_code == 200
+
+    run_response = client.post(
+        "/v1/projection-jobs/run?limit=10",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert run_response.status_code == 200
+
+    list_response = client.get(
+        "/v1/clarifications",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert list_response.status_code == 200
+    task = list_response.json()["tasks"][0]
+
+    resolve_response = client.post(
+        f"/v1/clarifications/{task['id']}/resolve",
+        json={"resolution": "keep_separate"},
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert resolve_response.status_code == 200
+    assert resolve_response.json()["status"] == "resolved"
+    assert resolve_response.json()["resolution"] == "keep_separate"
+
+    resolved_list_response = client.get(
+        "/v1/clarifications?task_status=resolved",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert resolved_list_response.status_code == 200
+    assert resolved_list_response.json()["tasks"][0]["id"] == task["id"]

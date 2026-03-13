@@ -27,6 +27,33 @@ export interface CapabilityMapResponse {
   capabilities: Record<string, boolean>;
 }
 
+export interface ClarificationResolveRequest {
+  resolution: string;
+  resolved_canonical_name?: string | null;
+}
+
+export interface ClarificationTaskListResponse {
+  tasks: ClarificationTaskResponse[];
+}
+
+export interface ClarificationTaskResponse {
+  id: string;
+  user_id: string;
+  source_record_id: string;
+  entity_type: string;
+  raw_name: string;
+  candidate_canonical_name: string;
+  status: string;
+  prompt: string;
+  options: string[];
+  confidence: number;
+  evidence: string;
+  resolution?: string | null;
+  resolved_canonical_name?: string | null;
+  created_at: string;
+  resolved_at?: string | null;
+}
+
 export interface DerivedStoreCleanupResponse {
   store: string;
   success: boolean;

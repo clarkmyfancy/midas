@@ -18,6 +18,11 @@ PROJECTION_TYPES = (
     "weaviate_episode_summary",
     "neo4j_knowledge_graph",
 )
+CLARIFICATION_RESOLUTIONS = (
+    "confirm_merge",
+    "keep_separate",
+    "dismiss",
+)
 
 
 @dataclass(frozen=True)
@@ -46,6 +51,36 @@ class ProjectionJobRecord:
     created_at: datetime
     completed_at: datetime | None
     last_error: str | None
+
+
+@dataclass(frozen=True)
+class ClarificationTaskRecord:
+    id: str
+    user_id: str
+    source_record_id: str
+    entity_type: str
+    raw_name: str
+    candidate_canonical_name: str
+    status: str
+    prompt: str
+    options: list[str]
+    confidence: float
+    evidence: str
+    resolution: str | None
+    resolved_canonical_name: str | None
+    created_at: datetime
+    resolved_at: datetime | None
+
+
+@dataclass(frozen=True)
+class AliasResolutionRecord:
+    user_id: str
+    entity_type: str
+    raw_name: str
+    resolution: str
+    resolved_canonical_name: str
+    created_at: datetime
+    updated_at: datetime
 
 
 class MemoryStore:
@@ -101,6 +136,48 @@ class MemoryStore:
     def mark_projection_job_failed(self, job_id: str, message: str) -> ProjectionJobRecord:
         raise NotImplementedError
 
+    def create_clarification_task(
+        self,
+        *,
+        user_id: str,
+        source_record_id: str,
+        entity_type: str,
+        raw_name: str,
+        candidate_canonical_name: str,
+        prompt: str,
+        options: list[str],
+        confidence: float,
+        evidence: str,
+    ) -> ClarificationTaskRecord:
+        raise NotImplementedError
+
+    def list_clarification_tasks(
+        self,
+        user_id: str,
+        *,
+        status: str | None = None,
+    ) -> list[ClarificationTaskRecord]:
+        raise NotImplementedError
+
+    def resolve_clarification_task(
+        self,
+        *,
+        user_id: str,
+        task_id: str,
+        resolution: str,
+        resolved_canonical_name: str | None = None,
+    ) -> ClarificationTaskRecord:
+        raise NotImplementedError
+
+    def get_alias_resolution(
+        self,
+        *,
+        user_id: str,
+        entity_type: str,
+        raw_name: str,
+    ) -> AliasResolutionRecord | None:
+        raise NotImplementedError
+
 
 class MemoryMemoryStore(MemoryStore):
     def __init__(self) -> None:
@@ -109,6 +186,9 @@ class MemoryMemoryStore(MemoryStore):
         self._entry_ids_by_user: dict[str, list[str]] = {}
         self._jobs_by_id: dict[str, ProjectionJobRecord] = {}
         self._job_ids_by_user: dict[str, list[str]] = {}
+        self._clarification_tasks_by_id: dict[str, ClarificationTaskRecord] = {}
+        self._clarification_task_ids_by_user: dict[str, list[str]] = {}
+        self._alias_resolution_by_key: dict[tuple[str, str, str], AliasResolutionRecord] = {}
 
     def setup(self) -> None:
         return None
@@ -232,6 +312,9 @@ class MemoryMemoryStore(MemoryStore):
             self._entry_ids_by_user.clear()
             self._jobs_by_id.clear()
             self._job_ids_by_user.clear()
+            self._clarification_tasks_by_id.clear()
+            self._clarification_task_ids_by_user.clear()
+            self._alias_resolution_by_key.clear()
 
     def list_pending_projection_jobs(
         self,
@@ -284,6 +367,133 @@ class MemoryMemoryStore(MemoryStore):
             )
             self._jobs_by_id[job_id] = updated
         return updated
+
+    def create_clarification_task(
+        self,
+        *,
+        user_id: str,
+        source_record_id: str,
+        entity_type: str,
+        raw_name: str,
+        candidate_canonical_name: str,
+        prompt: str,
+        options: list[str],
+        confidence: float,
+        evidence: str,
+    ) -> ClarificationTaskRecord:
+        normalized_raw_name = raw_name.strip()
+        with self._lock:
+            for task_id in self._clarification_task_ids_by_user.get(user_id, []):
+                current = self._clarification_tasks_by_id[task_id]
+                if (
+                    current.source_record_id == source_record_id
+                    and current.entity_type == entity_type
+                    and current.raw_name == normalized_raw_name
+                    and current.status == "pending"
+                ):
+                    return current
+
+            created_at = datetime.now(UTC)
+            task = ClarificationTaskRecord(
+                id=str(uuid4()),
+                user_id=user_id,
+                source_record_id=source_record_id,
+                entity_type=entity_type,
+                raw_name=normalized_raw_name,
+                candidate_canonical_name=candidate_canonical_name,
+                status="pending",
+                prompt=prompt,
+                options=list(options),
+                confidence=confidence,
+                evidence=evidence,
+                resolution=None,
+                resolved_canonical_name=None,
+                created_at=created_at,
+                resolved_at=None,
+            )
+            self._clarification_tasks_by_id[task.id] = task
+            self._clarification_task_ids_by_user.setdefault(user_id, []).append(task.id)
+            return task
+
+    def list_clarification_tasks(
+        self,
+        user_id: str,
+        *,
+        status: str | None = None,
+    ) -> list[ClarificationTaskRecord]:
+        with self._lock:
+            tasks = [
+                self._clarification_tasks_by_id[task_id]
+                for task_id in self._clarification_task_ids_by_user.get(user_id, [])
+            ]
+        if status is not None:
+            tasks = [task for task in tasks if task.status == status]
+        return sorted(tasks, key=lambda item: item.created_at, reverse=True)
+
+    def resolve_clarification_task(
+        self,
+        *,
+        user_id: str,
+        task_id: str,
+        resolution: str,
+        resolved_canonical_name: str | None = None,
+    ) -> ClarificationTaskRecord:
+        if resolution not in CLARIFICATION_RESOLUTIONS:
+            raise ValueError(f"Unsupported clarification resolution {resolution}")
+        with self._lock:
+            current = self._clarification_tasks_by_id.get(task_id)
+            if current is None or current.user_id != user_id:
+                raise KeyError(task_id)
+            normalized_name = resolved_canonical_name or (
+                current.candidate_canonical_name
+                if resolution == "confirm_merge"
+                else current.raw_name.strip().lower().replace(" ", "_")
+            )
+            resolved_at = datetime.now(UTC)
+            updated = ClarificationTaskRecord(
+                id=current.id,
+                user_id=current.user_id,
+                source_record_id=current.source_record_id,
+                entity_type=current.entity_type,
+                raw_name=current.raw_name,
+                candidate_canonical_name=current.candidate_canonical_name,
+                status="resolved",
+                prompt=current.prompt,
+                options=current.options,
+                confidence=current.confidence,
+                evidence=current.evidence,
+                resolution=resolution,
+                resolved_canonical_name=normalized_name,
+                created_at=current.created_at,
+                resolved_at=resolved_at,
+            )
+            self._clarification_tasks_by_id[task_id] = updated
+            if resolution != "dismiss":
+                key = (user_id, current.entity_type, current.raw_name.strip().lower())
+                now = datetime.now(UTC)
+                existing = self._alias_resolution_by_key.get(key)
+                self._alias_resolution_by_key[key] = AliasResolutionRecord(
+                    user_id=user_id,
+                    entity_type=current.entity_type,
+                    raw_name=current.raw_name.strip().lower(),
+                    resolution=resolution,
+                    resolved_canonical_name=normalized_name,
+                    created_at=existing.created_at if existing else now,
+                    updated_at=now,
+                )
+            return updated
+
+    def get_alias_resolution(
+        self,
+        *,
+        user_id: str,
+        entity_type: str,
+        raw_name: str,
+    ) -> AliasResolutionRecord | None:
+        with self._lock:
+            return self._alias_resolution_by_key.get(
+                (user_id, entity_type, raw_name.strip().lower())
+            )
 
 
 class PostgresMemoryStore(MemoryStore):
@@ -347,6 +557,48 @@ class PostgresMemoryStore(MemoryStore):
                 """
                 CREATE INDEX IF NOT EXISTS idx_memory_projection_jobs_user_source
                 ON memory_projection_jobs (user_id, source_record_id, created_at DESC)
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS clarification_tasks (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    source_record_id TEXT NOT NULL,
+                    entity_type TEXT NOT NULL,
+                    raw_name TEXT NOT NULL,
+                    candidate_canonical_name TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    prompt TEXT NOT NULL,
+                    options_json TEXT NOT NULL,
+                    confidence DOUBLE PRECISION NOT NULL,
+                    evidence TEXT NOT NULL,
+                    resolution TEXT,
+                    resolved_canonical_name TEXT,
+                    created_at TIMESTAMPTZ NOT NULL,
+                    resolved_at TIMESTAMPTZ,
+                    UNIQUE (user_id, source_record_id, entity_type, raw_name)
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_clarification_tasks_user_status
+                ON clarification_tasks (user_id, status, created_at DESC)
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS alias_resolutions (
+                    user_id TEXT NOT NULL,
+                    entity_type TEXT NOT NULL,
+                    raw_name TEXT NOT NULL,
+                    resolution TEXT NOT NULL,
+                    resolved_canonical_name TEXT NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL,
+                    updated_at TIMESTAMPTZ NOT NULL,
+                    PRIMARY KEY (user_id, entity_type, raw_name)
+                )
                 """
             )
             conn.commit()
@@ -566,6 +818,36 @@ class PostgresMemoryStore(MemoryStore):
             last_error=row[9],
         )
 
+    def _build_clarification_task(self, row: tuple[object, ...]) -> ClarificationTaskRecord:
+        return ClarificationTaskRecord(
+            id=row[0],
+            user_id=row[1],
+            source_record_id=row[2],
+            entity_type=row[3],
+            raw_name=row[4],
+            candidate_canonical_name=row[5],
+            status=row[6],
+            prompt=row[7],
+            options=list(json.loads(row[8])),
+            confidence=row[9],
+            evidence=row[10],
+            resolution=row[11],
+            resolved_canonical_name=row[12],
+            created_at=row[13],
+            resolved_at=row[14],
+        )
+
+    def _build_alias_resolution(self, row: tuple[object, ...]) -> AliasResolutionRecord:
+        return AliasResolutionRecord(
+            user_id=row[0],
+            entity_type=row[1],
+            raw_name=row[2],
+            resolution=row[3],
+            resolved_canonical_name=row[4],
+            created_at=row[5],
+            updated_at=row[6],
+        )
+
     def list_pending_projection_jobs(
         self,
         *,
@@ -631,6 +913,190 @@ class PostgresMemoryStore(MemoryStore):
         if row is None:
             raise KeyError(job_id)
         return self._build_job(row)
+
+    def create_clarification_task(
+        self,
+        *,
+        user_id: str,
+        source_record_id: str,
+        entity_type: str,
+        raw_name: str,
+        candidate_canonical_name: str,
+        prompt: str,
+        options: list[str],
+        confidence: float,
+        evidence: str,
+    ) -> ClarificationTaskRecord:
+        normalized_raw_name = raw_name.strip()
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, user_id, source_record_id, entity_type, raw_name, candidate_canonical_name, status,
+                       prompt, options_json, confidence, evidence, resolution, resolved_canonical_name, created_at, resolved_at
+                FROM clarification_tasks
+                WHERE user_id = %s AND source_record_id = %s AND entity_type = %s AND raw_name = %s AND status = 'pending'
+                """,
+                (user_id, source_record_id, entity_type, normalized_raw_name),
+            )
+            row = cur.fetchone()
+            if row is not None:
+                return self._build_clarification_task(row)
+
+            created_at = datetime.now(UTC)
+            cur.execute(
+                """
+                INSERT INTO clarification_tasks (
+                    id, user_id, source_record_id, entity_type, raw_name, candidate_canonical_name, status,
+                    prompt, options_json, confidence, evidence, resolution, resolved_canonical_name, created_at, resolved_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s, NULL, NULL, %s, NULL)
+                ON CONFLICT (user_id, source_record_id, entity_type, raw_name)
+                DO UPDATE SET
+                    candidate_canonical_name = EXCLUDED.candidate_canonical_name,
+                    prompt = EXCLUDED.prompt,
+                    options_json = EXCLUDED.options_json,
+                    confidence = EXCLUDED.confidence,
+                    evidence = EXCLUDED.evidence,
+                    status = CASE
+                        WHEN clarification_tasks.status = 'resolved' THEN clarification_tasks.status
+                        ELSE 'pending'
+                    END
+                RETURNING id, user_id, source_record_id, entity_type, raw_name, candidate_canonical_name, status,
+                          prompt, options_json, confidence, evidence, resolution, resolved_canonical_name, created_at, resolved_at
+                """,
+                (
+                    str(uuid4()),
+                    user_id,
+                    source_record_id,
+                    entity_type,
+                    normalized_raw_name,
+                    candidate_canonical_name,
+                    prompt,
+                    json.dumps(options),
+                    confidence,
+                    evidence,
+                    created_at,
+                ),
+            )
+            inserted = cur.fetchone()
+            conn.commit()
+        return self._build_clarification_task(inserted)
+
+    def list_clarification_tasks(
+        self,
+        user_id: str,
+        *,
+        status: str | None = None,
+    ) -> list[ClarificationTaskRecord]:
+        query = (
+            """
+            SELECT id, user_id, source_record_id, entity_type, raw_name, candidate_canonical_name, status,
+                   prompt, options_json, confidence, evidence, resolution, resolved_canonical_name, created_at, resolved_at
+            FROM clarification_tasks
+            WHERE user_id = %s
+            """
+        )
+        params: list[object] = [user_id]
+        if status is not None:
+            query += " AND status = %s"
+            params.append(status)
+        query += " ORDER BY created_at DESC"
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(query, params)
+            rows = cur.fetchall()
+        return [self._build_clarification_task(row) for row in rows]
+
+    def resolve_clarification_task(
+        self,
+        *,
+        user_id: str,
+        task_id: str,
+        resolution: str,
+        resolved_canonical_name: str | None = None,
+    ) -> ClarificationTaskRecord:
+        if resolution not in CLARIFICATION_RESOLUTIONS:
+            raise ValueError(f"Unsupported clarification resolution {resolution}")
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, user_id, source_record_id, entity_type, raw_name, candidate_canonical_name, status,
+                       prompt, options_json, confidence, evidence, resolution, resolved_canonical_name, created_at, resolved_at
+                FROM clarification_tasks
+                WHERE id = %s AND user_id = %s
+                """,
+                (task_id, user_id),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise KeyError(task_id)
+            current = self._build_clarification_task(row)
+            normalized_name = resolved_canonical_name or (
+                current.candidate_canonical_name
+                if resolution == "confirm_merge"
+                else current.raw_name.strip().lower().replace(" ", "_")
+            )
+            resolved_at = datetime.now(UTC)
+            cur.execute(
+                """
+                UPDATE clarification_tasks
+                SET status = 'resolved',
+                    resolution = %s,
+                    resolved_canonical_name = %s,
+                    resolved_at = %s
+                WHERE id = %s AND user_id = %s
+                RETURNING id, user_id, source_record_id, entity_type, raw_name, candidate_canonical_name, status,
+                          prompt, options_json, confidence, evidence, resolution, resolved_canonical_name, created_at, resolved_at
+                """,
+                (resolution, normalized_name, resolved_at, task_id, user_id),
+            )
+            updated_row = cur.fetchone()
+            if resolution != "dismiss":
+                now = datetime.now(UTC)
+                cur.execute(
+                    """
+                    INSERT INTO alias_resolutions (
+                        user_id, entity_type, raw_name, resolution, resolved_canonical_name, created_at, updated_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (user_id, entity_type, raw_name)
+                    DO UPDATE SET
+                        resolution = EXCLUDED.resolution,
+                        resolved_canonical_name = EXCLUDED.resolved_canonical_name,
+                        updated_at = EXCLUDED.updated_at
+                    """,
+                    (
+                        user_id,
+                        current.entity_type,
+                        current.raw_name.strip().lower(),
+                        resolution,
+                        normalized_name,
+                        now,
+                        now,
+                    ),
+                )
+            conn.commit()
+        return self._build_clarification_task(updated_row)
+
+    def get_alias_resolution(
+        self,
+        *,
+        user_id: str,
+        entity_type: str,
+        raw_name: str,
+    ) -> AliasResolutionRecord | None:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT user_id, entity_type, raw_name, resolution, resolved_canonical_name, created_at, updated_at
+                FROM alias_resolutions
+                WHERE user_id = %s AND entity_type = %s AND raw_name = %s
+                """,
+                (user_id, entity_type, raw_name.strip().lower()),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return self._build_alias_resolution(row)
 
     def _connect(self):
         if psycopg is None:  # pragma: no cover
@@ -730,6 +1196,67 @@ def mark_projection_job_completed(job_id: str) -> ProjectionJobRecord:
 
 def mark_projection_job_failed(job_id: str, message: str) -> ProjectionJobRecord:
     return get_memory_store().mark_projection_job_failed(job_id, message)
+
+
+def create_clarification_task_for_user(
+    *,
+    user_id: str,
+    source_record_id: str,
+    entity_type: str,
+    raw_name: str,
+    candidate_canonical_name: str,
+    prompt: str,
+    options: list[str],
+    confidence: float,
+    evidence: str,
+) -> ClarificationTaskRecord:
+    return get_memory_store().create_clarification_task(
+        user_id=user_id,
+        source_record_id=source_record_id,
+        entity_type=entity_type,
+        raw_name=raw_name,
+        candidate_canonical_name=candidate_canonical_name,
+        prompt=prompt,
+        options=options,
+        confidence=confidence,
+        evidence=evidence,
+    )
+
+
+def list_clarification_tasks_for_user(
+    user_id: str,
+    *,
+    status: str | None = None,
+) -> list[ClarificationTaskRecord]:
+    return get_memory_store().list_clarification_tasks(user_id, status=status)
+
+
+def resolve_clarification_task_for_user(
+    *,
+    user_id: str,
+    task_id: str,
+    resolution: str,
+    resolved_canonical_name: str | None = None,
+) -> ClarificationTaskRecord:
+    return get_memory_store().resolve_clarification_task(
+        user_id=user_id,
+        task_id=task_id,
+        resolution=resolution,
+        resolved_canonical_name=resolved_canonical_name,
+    )
+
+
+def get_alias_resolution_for_user(
+    *,
+    user_id: str,
+    entity_type: str,
+    raw_name: str,
+) -> AliasResolutionRecord | None:
+    return get_memory_store().get_alias_resolution(
+        user_id=user_id,
+        entity_type=entity_type,
+        raw_name=raw_name,
+    )
 
 
 def reset_memory_storage_for_tests() -> None:

@@ -8,6 +8,9 @@ from app.schemas.auth import (
 )
 from app.schemas.capabilities import CapabilityMapResponse
 from app.schemas.journal import (
+    ClarificationResolveRequest,
+    ClarificationTaskListResponse,
+    ClarificationTaskResponse,
     DerivedStoreCleanupResponse,
     JournalDeleteResponse,
     JournalEntryCreateRequest,
@@ -34,6 +37,9 @@ SCHEMA_MODELS = [
     AuthLoginRequest,
     AuthUserResponse,
     AuthTokenResponse,
+    ClarificationTaskResponse,
+    ClarificationTaskListResponse,
+    ClarificationResolveRequest,
     MemorySettingsResponse,
     JournalEntryCreateRequest,
     JournalEntryResponse,
@@ -57,6 +63,9 @@ __all__ = [
     "AuthTokenResponse",
     "AuthUserResponse",
     "CapabilityMapResponse",
+    "ClarificationResolveRequest",
+    "ClarificationTaskListResponse",
+    "ClarificationTaskResponse",
     "DerivedStoreCleanupResponse",
     "JournalDeleteResponse",
     "JournalEntryCreateRequest",

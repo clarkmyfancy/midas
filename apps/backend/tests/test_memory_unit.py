@@ -114,3 +114,36 @@ def test_heuristic_graph_extractor_merges_person_aliases_and_builds_relationship
     assert set(person_entities[0].aliases) >= {"Josh", "Joshua"}
     assert person_entities[0].needs_clarification is True
     assert any(relationship.relationship_type in {"affected", "contributed_to", "led_up_to"} for relationship in extraction.relationships)
+
+
+def test_clarification_resolution_guides_future_alias_handling() -> None:
+    store = MemoryMemoryStore()
+    task = store.create_clarification_task(
+        user_id="user-1",
+        source_record_id="entry-1",
+        entity_type="person",
+        raw_name="Josh",
+        candidate_canonical_name="joshua",
+        prompt="Does Josh refer to Joshua?",
+        options=["confirm_merge", "keep_separate", "dismiss"],
+        confidence=0.63,
+        evidence="Alias normalization inferred a merge.",
+    )
+
+    resolved = store.resolve_clarification_task(
+        user_id="user-1",
+        task_id=task.id,
+        resolution="keep_separate",
+    )
+    alias_resolution = store.get_alias_resolution(
+        user_id="user-1",
+        entity_type="person",
+        raw_name="Josh",
+    )
+
+    assert resolved.status == "resolved"
+    assert resolved.resolution == "keep_separate"
+    assert resolved.resolved_canonical_name == "josh"
+    assert alias_resolution is not None
+    assert alias_resolution.resolution == "keep_separate"
+    assert alias_resolution.resolved_canonical_name == "josh"

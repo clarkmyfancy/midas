@@ -78,6 +78,33 @@ class MemorySettingsResponse(BaseModel):
     auto_project_enabled: bool
 
 
+class ClarificationTaskResponse(BaseModel):
+    id: str
+    user_id: str
+    source_record_id: str
+    entity_type: str
+    raw_name: str
+    candidate_canonical_name: str
+    status: str
+    prompt: str
+    options: list[str]
+    confidence: float
+    evidence: str
+    resolution: str | None = None
+    resolved_canonical_name: str | None = None
+    created_at: datetime
+    resolved_at: datetime | None = None
+
+
+class ClarificationTaskListResponse(BaseModel):
+    tasks: list[ClarificationTaskResponse]
+
+
+class ClarificationResolveRequest(BaseModel):
+    resolution: str = Field(..., min_length=1)
+    resolved_canonical_name: str | None = None
+
+
 class WeaviateArtifactResponse(BaseModel):
     projection_job_id: str
     object_id: str

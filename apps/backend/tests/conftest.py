@@ -9,6 +9,7 @@ from midas.core.memory import reset_memory_storage_for_tests
 
 os.environ.pop("POSTGRES_URI", None)
 os.environ["MIDAS_LOAD_DOTENV_LOCAL"] = "0"
+os.environ["OPENAI_API_KEY"] = ""
 
 
 class FakeHabitAnalystChain:

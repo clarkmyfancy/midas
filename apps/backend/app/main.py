@@ -24,6 +24,9 @@ from app.schemas.auth import (
 )
 from app.schemas.capabilities import CapabilityMapResponse
 from app.schemas.journal import (
+    ClarificationResolveRequest,
+    ClarificationTaskListResponse,
+    ClarificationTaskResponse,
     DerivedStoreCleanupResponse,
     GraphNodeResponse,
     GraphObservationResponse,
@@ -56,10 +59,12 @@ from midas.core.loader import load_capabilities
 from midas.core.memory import (
     create_journal_entry_for_user,
     delete_journal_entry_for_user,
+    list_clarification_tasks_for_user,
     get_journal_entry_for_user,
     init_memory_storage,
     list_journal_entries_for_user,
     list_projection_jobs_for_user,
+    resolve_clarification_task_for_user,
 )
 from midas.core.projections import (
     GraphProjector,
@@ -121,6 +126,26 @@ def serialize_projection_job(job) -> ProjectionJobResponse:
     )
 
 
+def serialize_clarification_task(task) -> ClarificationTaskResponse:
+    return ClarificationTaskResponse(
+        id=task.id,
+        user_id=task.user_id,
+        source_record_id=task.source_record_id,
+        entity_type=task.entity_type,
+        raw_name=task.raw_name,
+        candidate_canonical_name=task.candidate_canonical_name,
+        status=task.status,
+        prompt=task.prompt,
+        options=task.options,
+        confidence=task.confidence,
+        evidence=task.evidence,
+        resolution=task.resolution,
+        resolved_canonical_name=task.resolved_canonical_name,
+        created_at=task.created_at,
+        resolved_at=task.resolved_at,
+    )
+
+
 def build_memory_links() -> dict[str, str]:
     weaviate = WeaviateProjector()
     graph = GraphProjector()
@@ -178,6 +203,37 @@ def healthcheck() -> dict[str, str]:
 @app.get("/v1/memory/settings", response_model=MemorySettingsResponse)
 def memory_settings() -> MemorySettingsResponse:
     return get_memory_settings()
+
+
+@app.get("/api/v1/clarifications", response_model=ClarificationTaskListResponse)
+@app.get("/v1/clarifications", response_model=ClarificationTaskListResponse)
+def list_clarifications(
+    user: Annotated[AuthUser, Depends(get_current_user)],
+    task_status: str | None = None,
+) -> ClarificationTaskListResponse:
+    tasks = list_clarification_tasks_for_user(user.id, status=task_status)
+    return ClarificationTaskListResponse(tasks=[serialize_clarification_task(task) for task in tasks])
+
+
+@app.post("/api/v1/clarifications/{task_id}/resolve", response_model=ClarificationTaskResponse)
+@app.post("/v1/clarifications/{task_id}/resolve", response_model=ClarificationTaskResponse)
+def resolve_clarification(
+    task_id: str,
+    payload: ClarificationResolveRequest,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> ClarificationTaskResponse:
+    try:
+        task = resolve_clarification_task_for_user(
+            user_id=user.id,
+            task_id=task_id,
+            resolution=payload.resolution,
+            resolved_canonical_name=payload.resolved_canonical_name,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Clarification task not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return serialize_clarification_task(task)
 
 
 @app.post("/api/v1/reflections")
