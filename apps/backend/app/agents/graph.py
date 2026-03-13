@@ -1,6 +1,9 @@
+import atexit
+import os
 import operator
 from collections.abc import AsyncIterator, Callable
 from typing import Annotated
+from uuid import uuid4
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
@@ -12,6 +15,11 @@ from app.schemas.reflection import ReflectionRequest, ReflectionResponse
 from midas.core.loader import load_capabilities
 from midas.core.registry import CapabilityRegistry
 from midas.interfaces.agents import ReflectionCoachInterface
+
+try:
+    from langgraph.checkpoint.postgres import PostgresSaver
+except ImportError:  # pragma: no cover - optional dependency in local dev until installed
+    PostgresSaver = None
 
 
 HABIT_ANALYST_SYSTEM_PROMPT = """You are Midas's habit analyst.
@@ -41,6 +49,10 @@ class ReflectionState(TypedDict):
     findings: Annotated[list[str], operator.add]
     summary: str
     trace: Annotated[list[str], operator.add]
+
+
+_checkpointer_context = None
+_checkpointer = None
 
 
 def create_habit_analyst_chain():
@@ -83,6 +95,23 @@ def resolve_next_node(registry: CapabilityRegistry) -> Callable[[ReflectionState
     return _resolve
 
 
+def get_checkpointer():
+    global _checkpointer_context, _checkpointer
+
+    if _checkpointer is not None:
+        return _checkpointer
+
+    db_uri = os.getenv("POSTGRES_URI")
+    if not db_uri or PostgresSaver is None:
+        return None
+
+    _checkpointer_context = PostgresSaver.from_conn_string(db_uri)
+    _checkpointer = _checkpointer_context.__enter__()
+    _checkpointer.setup()
+    atexit.register(_checkpointer_context.__exit__, None, None, None)
+    return _checkpointer
+
+
 def build_reflection_graph():
     workflow = StateGraph(ReflectionState)
     registry = load_capabilities()
@@ -95,7 +124,11 @@ def build_reflection_graph():
     workflow.add_conditional_edges("habit_analyst", resolve_next_node(registry))
     workflow.add_edge(reflection_coach.name, END)
 
-    return workflow.compile()
+    checkpointer = get_checkpointer()
+    if checkpointer is None:
+        return workflow.compile()
+
+    return workflow.compile(checkpointer=checkpointer)
 
 
 def build_reflection_input(payload: ReflectionRequest) -> ReflectionState:
@@ -111,17 +144,32 @@ def build_reflection_input(payload: ReflectionRequest) -> ReflectionState:
     }
 
 
+def build_reflection_config(payload: ReflectionRequest) -> dict[str, dict[str, str]]:
+    return {
+        "configurable": {
+            "thread_id": payload.thread_id or str(uuid4()),
+        }
+    }
+
+
 async def astream_reflection_workflow(
     payload: ReflectionRequest,
 ) -> AsyncIterator[dict[str, dict[str, object]]]:
     graph = build_reflection_graph()
-    async for chunk in graph.astream(build_reflection_input(payload), stream_mode="updates"):
+    async for chunk in graph.astream(
+        build_reflection_input(payload),
+        config=build_reflection_config(payload),
+        stream_mode="updates",
+    ):
         yield chunk
 
 
 def run_reflection_workflow(payload: ReflectionRequest) -> ReflectionResponse:
     graph = build_reflection_graph()
-    result = graph.invoke(build_reflection_input(payload))
+    result = graph.invoke(
+        build_reflection_input(payload),
+        config=build_reflection_config(payload),
+    )
     return ReflectionResponse(
         summary=result["summary"],
         findings=result["findings"],
