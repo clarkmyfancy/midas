@@ -1,7 +1,13 @@
+import os
+
 import pytest
 
 from langchain_core.messages import AIMessageChunk
 from midas.core.entitlements import reset_auth_storage_for_tests
+
+
+os.environ.pop("POSTGRES_URI", None)
+os.environ["MIDAS_LOAD_DOTENV_LOCAL"] = "0"
 
 
 class FakeHabitAnalystChain:

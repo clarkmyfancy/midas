@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from collections.abc import AsyncIterator
 from typing import Annotated
@@ -9,7 +10,10 @@ from fastapi import HTTPException, status
 from fastapi.responses import StreamingResponse
 
 
-load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+backend_env_dir = Path(__file__).resolve().parents[1]
+load_dotenv(backend_env_dir / ".env")
+if os.getenv("MIDAS_LOAD_DOTENV_LOCAL", "1") != "0":
+    load_dotenv(backend_env_dir / ".env.local", override=True)
 
 from app.agents.graph import astream_reflection_workflow
 from app.schemas.auth import (
@@ -73,6 +77,7 @@ def healthcheck() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.post("/api/v1/reflections")
 @app.post("/v1/reflections")
 async def create_reflection(
     payload: ReflectionRequest,
@@ -89,6 +94,7 @@ async def create_reflection(
     )
 
 
+@app.post("/api/v1/auth/register", response_model=AuthTokenResponse)
 @app.post("/v1/auth/register", response_model=AuthTokenResponse)
 def auth_register(payload: AuthRegisterRequest) -> AuthTokenResponse:
     try:
@@ -105,6 +111,7 @@ def auth_register(payload: AuthRegisterRequest) -> AuthTokenResponse:
     )
 
 
+@app.post("/api/v1/auth/login", response_model=AuthTokenResponse)
 @app.post("/v1/auth/login", response_model=AuthTokenResponse)
 def auth_login(payload: AuthLoginRequest) -> AuthTokenResponse:
     user = login_user(payload.email, payload.password)
@@ -118,6 +125,12 @@ def auth_login(payload: AuthLoginRequest) -> AuthTokenResponse:
         access_token=create_access_token(user),
         user=AuthUserResponse(id=user.id, email=user.email, is_pro=user.is_pro),
     )
+
+
+@app.get("/api/v1/auth/me", response_model=AuthUserResponse)
+@app.get("/v1/auth/me", response_model=AuthUserResponse)
+def auth_me(user: Annotated[AuthUser, Depends(get_current_user)]) -> AuthUserResponse:
+    return AuthUserResponse(id=user.id, email=user.email, is_pro=user.is_pro)
 
 
 @app.get("/v1/capabilities", response_model=CapabilityMapResponse)

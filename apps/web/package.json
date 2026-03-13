@@ -6,7 +6,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "@midas/types": "workspace:*",
@@ -18,7 +19,7 @@
     "@midas/config": "workspace:*",
     "@types/node": "^22.14.1",
     "@types/react": "^19.1.0",
-    "@types/react-dom": "^19.1.0"
+    "@types/react-dom": "^19.1.0",
+    "vitest": "^3.2.4"
   }
 }
-

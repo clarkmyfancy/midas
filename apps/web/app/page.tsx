@@ -1,96 +1,69 @@
-"use client";
-
-import { useEffect, useState } from "react";
-
-import type { CapabilityMapResponse, ReflectionResponse } from "@midas/types";
-
-import { FeatureGate } from "../components/feature-gate";
-
-const preview: ReflectionResponse = {
-  summary:
-    "Midas highlights semantic drift between stated priorities and observed activity patterns.",
-  findings: [
-    "Energy appears constrained after late-night work blocks.",
-    "Movement is present but inconsistent across the week.",
-  ],
-  trace: [
-    "habit_analyst: reviewed synthetic journal patterns",
-    "reflection_coach: generated weekly coaching summary",
-  ],
-};
-
-const defaultCapabilityMap: CapabilityMapResponse = {
-  capabilities: {
-    pro_analytics: false,
-    weekly_reflection: false,
-    mental_model_graph: false,
-  },
-};
+import Link from "next/link";
 
 export default function HomePage() {
-  const [capabilityMap, setCapabilityMap] =
-    useState<CapabilityMapResponse>(defaultCapabilityMap);
-
-  useEffect(() => {
-    const controller = new AbortController();
-
-    async function loadCapabilities() {
-      try {
-        const response = await fetch("/api/v1/capabilities", {
-          cache: "no-store",
-          signal: controller.signal,
-        });
-
-        if (!response.ok) {
-          return;
-        }
-
-        const data = (await response.json()) as CapabilityMapResponse;
-        setCapabilityMap(data);
-      } catch (error) {
-        if ((error as Error).name !== "AbortError") {
-          console.error("Failed to load capabilities", error);
-        }
-      }
-    }
-
-    void loadCapabilities();
-
-    return () => controller.abort();
-  }, []);
-
   return (
     <main className="page">
-      <section className="hero">
-        <p className="eyebrow">Midas</p>
-        <h1>Private reflection infrastructure across iPhone, web, and API.</h1>
-        <p className="lede">
-          The monorepo keeps contracts shared across the backend, dashboard, and
-          future mobile integrations.
-        </p>
-      </section>
-
-      <section className="panel">
-        <h2>Shared Contract Preview</h2>
-        <p>
-          This card is typed from the backend-generated Pydantic contract stored in
-          <code>@midas/types</code>.
-        </p>
-        <pre>{JSON.stringify(preview, null, 2)}</pre>
-      </section>
-
-      <section className="panel gate-panel">
-        <h2>Feature Gate Preview</h2>
-        <FeatureGate
-          capability="weekly_reflection"
-          capabilities={capabilityMap.capabilities}
-          description="Unlock the high-reasoning weekly coach and long-horizon synthesis."
-        >
-          <div className="feature-unlocked">
-            <h3>Weekly Reflection</h3>
-            <p>{preview.summary}</p>
+      <section className="hero hero-grid">
+        <div>
+          <p className="eyebrow">Midas Workspace</p>
+          <h1>Local accounts. Real backend. Live model tokens in the browser.</h1>
+          <p className="lede">
+            Sign in on the web, persist users in Postgres, and watch the reflection
+            stream arrive from the running FastAPI backend as the model emits tokens.
+          </p>
+          <div className="hero-actions">
+            <Link className="button button-primary" href="/login">
+              Create an account
+            </Link>
+            <Link className="button button-secondary" href="/chat">
+              Open chat
+            </Link>
           </div>
-        </FeatureGate>
+        </div>
+
+        <div className="panel status-panel">
+          <div className="status-stack">
+            <div>
+              <p className="eyebrow">Flow</p>
+              <h2>From browser to model output</h2>
+            </div>
+            <ul className="timeline">
+              <li>Register or log in against the FastAPI auth endpoints.</li>
+              <li>Store the returned bearer token locally in the browser.</li>
+              <li>Send a reflection message to the streaming backend route.</li>
+              <li>Render each SSE token into the active assistant bubble live.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section className="card-grid">
+        <article className="panel">
+          <p className="eyebrow">Auth</p>
+          <h2>Real user accounts</h2>
+          <p>
+            When Postgres is running, registrations persist in the local database
+            instead of memory. Each account gets its own bearer token and thread key.
+          </p>
+        </article>
+
+        <article className="panel">
+          <p className="eyebrow">Streaming</p>
+          <h2>Actual token scroll</h2>
+          <p>
+            The chat page consumes the backend SSE stream directly so you can watch
+            tokens appear as the model produces them.
+          </p>
+        </article>
+
+        <article className="panel">
+          <p className="eyebrow">Local-first</p>
+          <h2>Simple local stack</h2>
+          <p>
+            The web app talks to the backend over HTTP on localhost, and Postgres is
+            available via the repository Docker Compose file when you want persistence.
+          </p>
+        </article>
       </section>
     </main>
   );

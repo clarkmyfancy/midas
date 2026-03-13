@@ -41,6 +41,17 @@ def test_auth_register_and_login() -> None:
     assert login_response.json()["user"]["email"] == "user@example.com"
 
 
+def test_auth_me_returns_current_user() -> None:
+    access_token = register_and_login()
+    response = client.get(
+        "/v1/auth/me",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["email"] == "user@example.com"
+
+
 def test_reflection_endpoint() -> None:
     access_token = register_and_login()
 
@@ -62,6 +73,25 @@ def test_reflection_endpoint() -> None:
     assert response.headers["content-type"].startswith("text/event-stream")
     assert "data: - Semantic drift:" in body
     assert "data: - HRV and sleep suggest strain" in body
+
+
+def test_reflection_endpoint_api_alias() -> None:
+    access_token = register_and_login()
+
+    with client.stream(
+        "POST",
+        "/api/v1/reflections",
+        json={
+            "journal_entry": "I dragged through the afternoon but said I was productive.",
+            "goals": ["Protect focus"],
+        },
+        headers={"Authorization": f"Bearer {access_token}"},
+    ) as response:
+        body = "".join(response.iter_text())
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert "data: - Semantic drift:" in body
 
 
 def test_reflection_endpoint_requires_bearer_token() -> None:

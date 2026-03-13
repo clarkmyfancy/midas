@@ -113,6 +113,8 @@ def render_file(models: list[type[BaseModel]]) -> str:
     ]
 
     for name in sorted(definitions):
+        if name in model_schemas:
+            continue
         sections.append(render_definition(name, definitions[name]))
         sections.append("")
 
