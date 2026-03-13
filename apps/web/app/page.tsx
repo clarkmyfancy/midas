@@ -1,3 +1,7 @@
+"use client";
+
+import { useEffect, useState } from "react";
+
 import type { CapabilityMapResponse, ReflectionResponse } from "@midas/types";
 
 import { FeatureGate } from "../components/feature-gate";
@@ -15,7 +19,7 @@ const preview: ReflectionResponse = {
   ],
 };
 
-const capabilityMap: CapabilityMapResponse = {
+const defaultCapabilityMap: CapabilityMapResponse = {
   capabilities: {
     pro_analytics: false,
     weekly_reflection: false,
@@ -24,6 +28,37 @@ const capabilityMap: CapabilityMapResponse = {
 };
 
 export default function HomePage() {
+  const [capabilityMap, setCapabilityMap] =
+    useState<CapabilityMapResponse>(defaultCapabilityMap);
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    async function loadCapabilities() {
+      try {
+        const response = await fetch("/api/v1/capabilities", {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+
+        if (!response.ok) {
+          return;
+        }
+
+        const data = (await response.json()) as CapabilityMapResponse;
+        setCapabilityMap(data);
+      } catch (error) {
+        if ((error as Error).name !== "AbortError") {
+          console.error("Failed to load capabilities", error);
+        }
+      }
+    }
+
+    void loadCapabilities();
+
+    return () => controller.abort();
+  }, []);
+
   return (
     <main className="page">
       <section className="hero">

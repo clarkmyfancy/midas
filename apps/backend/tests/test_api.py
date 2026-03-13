@@ -15,24 +15,27 @@ def test_healthcheck() -> None:
 
 
 def test_reflection_endpoint() -> None:
-    response = client.post(
+    with client.stream(
+        "POST",
         "/v1/reflections",
         json={
             "journal_entry": "I felt tired after work, but I still went for a walk.",
             "goals": ["Protect energy", "Stay active"],
+            "steps": 6840,
+            "sleep_hours": 6.5,
+            "hrv_ms": 42.0,
         },
-    )
-
-    body = response.json()
+    ) as response:
+        body = "".join(response.iter_text())
 
     assert response.status_code == 200
-    assert "summary" in body
-    assert len(body["findings"]) >= 2
-    assert any("habit_analyst" in item for item in body["trace"])
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert "data: Analyzing " in body
+    assert "data: Midas " in body
 
 
 def test_capabilities_endpoint_defaults_to_core_mode() -> None:
-    response = client.get("/api/v1/capabilities")
+    response = client.get("/v1/capabilities")
 
     assert response.status_code == 200
     assert response.json() == {

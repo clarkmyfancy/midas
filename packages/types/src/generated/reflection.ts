@@ -8,6 +8,9 @@ export interface CapabilityMapResponse {
 export interface ReflectionRequest {
   journal_entry: string;
   goals?: string[];
+  steps?: number | null;
+  sleep_hours?: number | null;
+  hrv_ms?: number | null;
 }
 
 export interface ReflectionResponse {

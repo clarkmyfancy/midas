@@ -4,6 +4,9 @@
 .turbo
 .venv
 .derived-data
+.env
+.env.*
+!.env.example
 *.tsbuildinfo
 *.xcodeproj
 node_modules

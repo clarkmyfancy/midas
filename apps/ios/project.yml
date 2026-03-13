@@ -14,4 +14,4 @@ targets:
         SWIFT_VERSION: "5.10"
         PRODUCT_NAME: Midas
         INFOPLIST_FILE: Midas/Info.plist
-
+        CODE_SIGN_ENTITLEMENTS: Midas/Midas.entitlements
