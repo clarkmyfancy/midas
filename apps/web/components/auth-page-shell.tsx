@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, type FormEvent } from "react";
 
@@ -12,7 +11,7 @@ type AuthMode = "register" | "login";
 export function AuthPageShell() {
   const router = useRouter();
   const { isReady, session, login, register } = useAuth();
-  const [mode, setMode] = useState<AuthMode>("register");
+  const [mode, setMode] = useState<AuthMode>("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [isPending, setIsPending] = useState(false);
@@ -21,7 +20,7 @@ export function AuthPageShell() {
 
   useEffect(() => {
     if (isReady && session) {
-      router.replace("/chat");
+      router.replace("/");
     }
   }, [isReady, router, session]);
 
@@ -34,13 +33,13 @@ export function AuthPageShell() {
     try {
       if (mode === "register") {
         await register({ email, password });
-        setSuccess("Account created and signed in. Redirecting to chat.");
+        setSuccess("Account created and signed in. Redirecting to reflect.");
       } else {
         await login({ email, password });
-        setSuccess("Signed in. Redirecting to chat.");
+        setSuccess("Signed in. Redirecting to reflect.");
       }
 
-      router.push("/chat");
+      router.push("/");
     } catch (caughtError) {
       if (caughtError instanceof ApiError) {
         setError(caughtError.message);
@@ -53,38 +52,20 @@ export function AuthPageShell() {
   }
 
   return (
-    <main className="page auth-layout">
-      <section className="panel">
-        <p className="eyebrow">Account</p>
-        <h1>{mode === "register" ? "Create your local Midas account" : "Sign back in"}</h1>
-        <p className="lede">
-          This page calls the real backend auth endpoints and stores the returned bearer
-          token in the browser for the chat session.
+    <main className="page auth-page-simple">
+      <section className="auth-card">
+        <p className="auth-brand">MIDAS</p>
+        <h1 className="auth-title">{mode === "register" ? "Create account" : "Sign in"}</h1>
+        <p className="auth-copy">
+          You need an account to access the workspace and your private data.
         </p>
 
-        <div className="auth-toggle" role="tablist" aria-label="Authentication mode">
-          <button
-            className={mode === "register" ? "button button-primary" : "ghost-button"}
-            onClick={() => setMode("register")}
-            type="button"
-          >
-            Create account
-          </button>
-          <button
-            className={mode === "login" ? "button button-primary" : "ghost-button"}
-            onClick={() => setMode("login")}
-            type="button"
-          >
-            Log in
-          </button>
-        </div>
-
-        <form className="auth-form" onSubmit={handleSubmit}>
-          <label className="label">
+        <form className="auth-form auth-form-card" onSubmit={handleSubmit}>
+          <label className="auth-field-label">
             Email
             <input
               autoComplete="email"
-              className="input"
+              className="auth-input"
               name="email"
               onChange={(event) => setEmail(event.target.value)}
               placeholder="you@example.com"
@@ -93,15 +74,15 @@ export function AuthPageShell() {
             />
           </label>
 
-          <label className="label">
+          <label className="auth-field-label">
             Password
             <input
               autoComplete={mode === "register" ? "new-password" : "current-password"}
-              className="input"
+              className="auth-input"
               minLength={8}
               name="password"
               onChange={(event) => setPassword(event.target.value)}
-              placeholder="At least 8 characters"
+              placeholder=""
               type="password"
               value={password}
             />
@@ -110,34 +91,28 @@ export function AuthPageShell() {
           {error ? <div className="error-banner">{error}</div> : null}
           {success ? <div className="success-banner">{success}</div> : null}
 
-          <div className="chat-actions">
-            <button className="button button-primary" disabled={isPending} type="submit">
+          <div className="auth-actions">
+            <button className="auth-submit-button" disabled={isPending} type="submit">
               {isPending
                 ? "Submitting..."
                 : mode === "register"
                   ? "Create account"
-                  : "Log in"}
+                  : "Sign in"}
             </button>
-            <Link className="link-button" href="/chat">
-              View chat
-            </Link>
           </div>
         </form>
-      </section>
 
-      <aside className="panel auth-side">
-        <p className="eyebrow">Notes</p>
-        <h2>Local persistence path</h2>
-        <ul className="bullet-list">
-          <li>With Postgres running, new users are stored in the `auth_users` table.</li>
-          <li>Without Postgres, auth falls back to in-memory storage for quick local dev.</li>
-          <li>The chat page uses the stored bearer token to stream live model output.</li>
-        </ul>
-        <p className="helper">
-          If you are already signed in, this page will move you to{" "}
-          <Link href="/chat">the chat workspace</Link>.
+        <p className="auth-switch-copy">
+          {mode === "register" ? "Already have an account? " : "Need an account? "}
+          <button
+            className="auth-switch-link"
+            onClick={() => setMode(mode === "register" ? "login" : "register")}
+            type="button"
+          >
+            {mode === "register" ? "Sign in" : "Create one"}
+          </button>
         </p>
-      </aside>
+      </section>
     </main>
   );
 }

@@ -20,12 +20,12 @@ const WELCOME_MESSAGE: ChatMessage = {
   id: "welcome",
   role: "assistant",
   content:
-    "Send a reflection note here and Midas will stream the current LLM output into this conversation live.",
+    "Start reflecting below. Your response will stream into this upper pane as Midas produces it.",
 };
 
 export function ChatPageShell() {
   const router = useRouter();
-  const streamRef = useRef<HTMLDivElement | null>(null);
+  const aiPaneRef = useRef<HTMLDivElement | null>(null);
   const { isReady, session, logout } = useAuth();
   const [messages, setMessages] = useState<ChatMessage[]>([WELCOME_MESSAGE]);
   const [input, setInput] = useState("");
@@ -42,8 +42,8 @@ export function ChatPageShell() {
   }, [isReady, router, session]);
 
   useEffect(() => {
-    if (streamRef.current) {
-      streamRef.current.scrollTop = streamRef.current.scrollHeight;
+    if (aiPaneRef.current) {
+      aiPaneRef.current.scrollTop = aiPaneRef.current.scrollHeight;
     }
   }, [messages]);
 
@@ -133,92 +133,93 @@ export function ChatPageShell() {
   }
 
   return (
-    <main className="page">
-      <section className="chat-shell">
-        <div className="panel chat-stream" ref={streamRef}>
+    <main className="page reflect-page">
+      <section className="reflect-shell">
+        <div className="reflect-ai-pane" ref={aiPaneRef}>
+          <div className="reflect-status-row">
+            <span className={`status-pill ${isStreaming ? "status-pill-live" : ""}`}>
+              {isStreaming ? "Listening..." : "Ready"}
+            </span>
+          </div>
+
           {messages.map((message) => (
             <article
               className={[
-                "chat-message",
-                message.role === "user" ? "chat-message-user" : "chat-message-assistant",
-                message.streaming ? "chat-message-streaming" : "",
+                "reflect-message",
+                message.role === "user" ? "reflect-message-user" : "reflect-message-assistant",
+                message.streaming ? "reflect-message-streaming" : "",
               ]
                 .filter(Boolean)
                 .join(" ")}
               key={message.id}
             >
-              <div className="message-meta">
+              <div className="reflect-message-meta">
                 <span>{message.role === "user" ? "You" : "Midas"}</span>
-                {message.streaming ? <span className="status-dot">Live</span> : null}
               </div>
-              <div className="message-body">
+              <div className="reflect-message-body">
                 {message.content || "Waiting for the first token..."}
               </div>
             </article>
           ))}
         </div>
 
-        <form className="composer" onSubmit={handleSubmit}>
-          <div className="composer-grid">
-            <label className="label">
-              Reflection prompt
+        <form className="reflect-composer" onSubmit={handleSubmit}>
+          <label className="reflect-composer-label">
+            Reflection
+            <div className="reflect-input-shell">
               <textarea
-                className="textarea"
+                className="reflect-textarea"
                 onChange={(event) => setInput(event.target.value)}
-                placeholder="I felt focused in the morning, then my energy dropped and I pushed through anyway."
+                placeholder="Ask a question about your reflection..."
                 value={input}
+              />
+              <button
+                aria-label="Send reflection"
+                className="reflect-send-button"
+                disabled={isStreaming || !session}
+                type="submit"
+              >
+                ↑
+              </button>
+            </div>
+          </label>
+
+          <div className="reflect-metrics-row">
+            <label className="label">
+              Steps
+              <input
+                className="input"
+                inputMode="numeric"
+                onChange={(event) => setSteps(event.target.value)}
+                placeholder="6840"
+                value={steps}
               />
             </label>
 
-            <div className="composer-inline">
-              <label className="label">
-                Steps
-                <input
-                  className="input"
-                  inputMode="numeric"
-                  onChange={(event) => setSteps(event.target.value)}
-                  placeholder="6840"
-                  value={steps}
-                />
-              </label>
+            <label className="label">
+              Sleep hours
+              <input
+                className="input"
+                inputMode="decimal"
+                onChange={(event) => setSleepHours(event.target.value)}
+                placeholder="6.5"
+                value={sleepHours}
+              />
+            </label>
 
-              <label className="label">
-                Sleep hours
-                <input
-                  className="input"
-                  inputMode="decimal"
-                  onChange={(event) => setSleepHours(event.target.value)}
-                  placeholder="6.5"
-                  value={sleepHours}
-                />
-              </label>
-
-              <label className="label">
-                HRV (ms)
-                <input
-                  className="input"
-                  inputMode="decimal"
-                  onChange={(event) => setHrvMs(event.target.value)}
-                  placeholder="42"
-                  value={hrvMs}
-                />
-              </label>
-            </div>
+            <label className="label">
+              HRV (ms)
+              <input
+                className="input"
+                inputMode="decimal"
+                onChange={(event) => setHrvMs(event.target.value)}
+                placeholder="42"
+                value={hrvMs}
+              />
+            </label>
           </div>
 
           {error ? <div className="error-banner">{error}</div> : null}
-
-          <div className="composer-actions">
-            <span className={`status-pill ${isStreaming ? "status-pill-live" : ""}`}>
-              {isStreaming ? "Streaming tokens" : "Ready"}
-            </span>
-            <button className="button button-primary" disabled={isStreaming || !session} type="submit">
-              {isStreaming ? "Streaming..." : "Send to Midas"}
-            </button>
-            <p className="hint">
-              Signed in as <strong>{session?.user.email ?? "unknown"}</strong>
-            </p>
-          </div>
         </form>
       </section>
     </main>
