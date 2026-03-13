@@ -43,6 +43,7 @@ from app.schemas.journal import (
     ProjectionRunResponse,
     WeaviateArtifactResponse,
 )
+from app.schemas.review import ReviewFindingResponse, ReviewStatResponse, WeeklyReviewResponse
 from app.schemas.reflection import ReflectionRequest
 from midas.core.entitlements import (
     AuthUser,
@@ -73,6 +74,7 @@ from midas.core.projections import (
     delete_derived_artifacts,
     process_pending_projection_jobs,
 )
+from midas.core.review import build_weekly_review
 
 app = FastAPI(
     title="Midas API",
@@ -180,6 +182,18 @@ def serialize_graph_relationship(relationship: dict[str, object]) -> GraphRelati
     )
 
 
+def serialize_review_finding(finding) -> ReviewFindingResponse:
+    return ReviewFindingResponse(
+        title=finding.title,
+        detail=finding.detail,
+        evidence=finding.evidence,
+    )
+
+
+def serialize_review_stat(stat) -> ReviewStatResponse:
+    return ReviewStatResponse(label=stat.label, value=stat.value)
+
+
 async def stream_reflection_events(payload: ReflectionRequest) -> AsyncIterator[str]:
     async for chunk in astream_reflection_workflow(payload):
         if not isinstance(chunk, tuple) or len(chunk) != 2:
@@ -203,6 +217,42 @@ def healthcheck() -> dict[str, str]:
 @app.get("/v1/memory/settings", response_model=MemorySettingsResponse)
 def memory_settings() -> MemorySettingsResponse:
     return get_memory_settings()
+
+
+@app.get("/api/v1/review", response_model=WeeklyReviewResponse)
+@app.get("/v1/review", response_model=WeeklyReviewResponse)
+def get_weekly_review(
+    user: Annotated[AuthUser, Depends(get_current_user)],
+    window_days: int = 7,
+) -> WeeklyReviewResponse:
+    result = build_weekly_review(user_id=user.id, window_days=window_days)
+    return WeeklyReviewResponse(
+        summary=result.summary,
+        generated_at=result.generated_at,
+        window_days=result.window_days,
+        findings=[serialize_review_finding(finding) for finding in result.findings],
+        stats=[serialize_review_stat(stat) for stat in result.stats],
+        entries=[serialize_journal_entry(entry) for entry in result.entries],
+        memory_highlights=[
+            WeaviateArtifactResponse(
+                projection_job_id=str(artifact.get("projection_job_id", "")),
+                object_id=str(artifact.get("object_id", "")),
+                class_name=str(artifact.get("class_name", "")),
+                content=artifact.get("content"),
+                url=artifact.get("url"),
+                raw=artifact.get("raw"),
+            )
+            for artifact in result.memory_highlights
+        ],
+        graph=GraphObservationResponse(
+            observation=None,
+            nodes=[serialize_graph_node(node) for node in result.graph_nodes],
+            relationships=[serialize_graph_relationship(relationship) for relationship in result.graph_relationships],
+            cypher_browser_url=GraphProjector().browser_url(),
+        ),
+        clarifications=[serialize_clarification_task(task) for task in result.clarifications],
+        warnings=result.warnings,
+    )
 
 
 @app.get("/api/v1/clarifications", response_model=ClarificationTaskListResponse)

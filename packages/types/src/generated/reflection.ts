@@ -173,6 +173,17 @@ export interface ReflectionResponse {
   trace: string[];
 }
 
+export interface ReviewFindingResponse {
+  title: string;
+  detail: string;
+  evidence: string[];
+}
+
+export interface ReviewStatResponse {
+  label: string;
+  value: string;
+}
+
 export interface WeaviateArtifactResponse {
   projection_job_id: string;
   object_id: string;
@@ -180,4 +191,17 @@ export interface WeaviateArtifactResponse {
   content?: string | null;
   url?: string | null;
   raw?: Record<string, unknown> | null;
+}
+
+export interface WeeklyReviewResponse {
+  summary: string;
+  generated_at: string;
+  window_days: number;
+  findings: ReviewFindingResponse[];
+  stats: ReviewStatResponse[];
+  entries: JournalEntryResponse[];
+  memory_highlights: WeaviateArtifactResponse[];
+  graph: GraphObservationResponse;
+  clarifications: ClarificationTaskResponse[];
+  warnings: string[];
 }

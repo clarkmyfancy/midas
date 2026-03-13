@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 from app.main import app
+from midas.core.memory import create_clarification_task_for_user
 
 
 client = TestClient(app)
@@ -262,3 +263,54 @@ def test_delete_entry_cascades_into_derived_stores(monkeypatch) -> None:
         object_payload["properties"]["source_record_id"] == entry_id
         for object_payload in FakeWeaviateProjector.objects.values()
     )
+
+
+def test_review_endpoint_assembles_hybrid_memory_payload(monkeypatch) -> None:
+    FakeWeaviateProjector.objects = {}
+    FakeGraphProjector.observations = {}
+    monkeypatch.setattr("midas.core.projections.WeaviateProjector", FakeWeaviateProjector)
+    monkeypatch.setattr("midas.core.projections.GraphProjector", FakeGraphProjector)
+    monkeypatch.setattr("app.main.WeaviateProjector", FakeWeaviateProjector)
+    monkeypatch.setattr("app.main.GraphProjector", FakeGraphProjector)
+    monkeypatch.setattr("midas.core.review.WeaviateProjector", FakeWeaviateProjector)
+    monkeypatch.setattr("midas.core.review.GraphProjector", FakeGraphProjector)
+    monkeypatch.setenv("MIDAS_AUTO_PROJECT", "0")
+
+    access_token = register_user("review@example.com")
+    me_response = client.get(
+        "/v1/auth/me",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert me_response.status_code == 200
+    user_id = me_response.json()["id"]
+    entry_id = create_entry(access_token, "I felt wrecked after work and skipped my run.")
+
+    run_response = client.post(
+        "/v1/projection-jobs/run?limit=10",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert run_response.status_code == 200
+
+    create_clarification_task_for_user(
+        user_id=user_id,
+        source_record_id=entry_id,
+        entity_type="person",
+        raw_name="Josh",
+        candidate_canonical_name="joshua",
+        prompt="Does 'Josh' refer to 'Joshua' in this entry, or should it stay separate?",
+        options=["confirm_merge", "keep_separate", "dismiss"],
+        confidence=0.63,
+        evidence="Alias normalization inferred a merge.",
+    )
+
+    review_response = client.get(
+        "/v1/review",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert review_response.status_code == 200
+    payload = review_response.json()
+    assert payload["summary"]
+    assert payload["entries"]
+    assert payload["memory_highlights"]
+    assert payload["graph"]["nodes"]
+    assert payload["clarifications"]

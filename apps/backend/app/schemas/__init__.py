@@ -27,6 +27,7 @@ from app.schemas.journal import (
     ProjectionRunResponse,
     WeaviateArtifactResponse,
 )
+from app.schemas.review import ReviewFindingResponse, ReviewStatResponse, WeeklyReviewResponse
 from app.schemas.reflection import ReflectionRequest, ReflectionResponse
 
 SCHEMA_MODELS = [
@@ -55,6 +56,9 @@ SCHEMA_MODELS = [
     GraphRelationshipResponse,
     GraphObservationResponse,
     MemoryDebugResponse,
+    ReviewFindingResponse,
+    ReviewStatResponse,
+    WeeklyReviewResponse,
 ]
 
 __all__ = [
@@ -80,6 +84,9 @@ __all__ = [
     "ProjectionJobListResponse",
     "ProjectionJobResponse",
     "ProjectionRunResponse",
+    "ReviewFindingResponse",
+    "ReviewStatResponse",
+    "WeeklyReviewResponse",
     "WeaviateArtifactResponse",
     "ReflectionRequest",
     "ReflectionResponse",

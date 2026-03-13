@@ -487,6 +487,109 @@ h2 {
   line-height: 1.55;
 }
 
+.review-page,
+.review-layout,
+.review-stats-grid,
+.review-graph-grid {
+  display: grid;
+  gap: 24px;
+}
+
+.review-hero {
+  gap: 18px;
+}
+
+.review-title {
+  max-width: 14ch;
+}
+
+.review-toolbar,
+.review-clarification-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.review-summary {
+  margin: 0;
+  max-width: 72ch;
+  color: var(--text);
+  font-size: 1.08rem;
+  line-height: 1.7;
+}
+
+.review-stats-grid {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.review-stat-card,
+.review-finding-card,
+.review-clarification-card,
+.review-memory-card,
+.review-entry-card,
+.review-entity-card,
+.review-relationship-card {
+  display: grid;
+  gap: 8px;
+}
+
+.review-stat-label {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.review-stat-value {
+  font-size: 1.6rem;
+}
+
+.review-layout {
+  grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.9fr);
+}
+
+.review-finding-list,
+.review-clarification-list,
+.review-memory-list,
+.review-entry-list,
+.review-entity-list,
+.review-relationship-list,
+.review-warning-list {
+  display: grid;
+  gap: 14px;
+}
+
+.review-clarification-card,
+.review-memory-card,
+.review-entry-card,
+.review-entity-card,
+.review-relationship-card,
+.review-finding-card {
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--surface-strong);
+  padding: 16px;
+}
+
+.review-memory-card p,
+.review-finding-card p,
+.review-clarification-card p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.review-graph-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.review-entries-panel {
+  display: grid;
+  gap: 16px;
+}
+
 .input {
   min-height: 52px;
   padding: 0 16px;
@@ -951,7 +1054,10 @@ code {
 @media (max-width: 980px) {
   .hero-grid,
   .auth-layout,
-  .card-grid {
+  .card-grid,
+  .review-layout,
+  .review-graph-grid,
+  .review-stats-grid {
     grid-template-columns: 1fr;
   }
 
