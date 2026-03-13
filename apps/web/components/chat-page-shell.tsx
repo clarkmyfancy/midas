@@ -133,24 +133,8 @@ export function ChatPageShell() {
   }
 
   return (
-    <main className="page chat-layout">
+    <main className="page">
       <section className="chat-shell">
-        <div className="panel">
-          <div className="chat-toolbar">
-            <div>
-              <p className="eyebrow">Chat</p>
-              <h1>Live reflection stream</h1>
-            </div>
-            <span className={`status-pill ${isStreaming ? "status-pill-live" : ""}`}>
-              {isStreaming ? "Streaming tokens" : "Ready"}
-            </span>
-          </div>
-          <p className="lede">
-            Messages here are sent to the authenticated backend endpoint and rendered as
-            SSE tokens arrive.
-          </p>
-        </div>
-
         <div className="panel chat-stream" ref={streamRef}>
           {messages.map((message) => (
             <article
@@ -225,6 +209,9 @@ export function ChatPageShell() {
           {error ? <div className="error-banner">{error}</div> : null}
 
           <div className="composer-actions">
+            <span className={`status-pill ${isStreaming ? "status-pill-live" : ""}`}>
+              {isStreaming ? "Streaming tokens" : "Ready"}
+            </span>
             <button className="button button-primary" disabled={isStreaming || !session} type="submit">
               {isStreaming ? "Streaming..." : "Send to Midas"}
             </button>
@@ -234,17 +221,6 @@ export function ChatPageShell() {
           </div>
         </form>
       </section>
-
-      <aside className="panel chat-sidebar">
-        <p className="eyebrow">Session</p>
-        <h2>What this page is doing</h2>
-        <ul className="stat-list">
-          <li>Uses your bearer token from the login flow.</li>
-          <li>Sends requests to `/api/v1/reflections` on the FastAPI backend.</li>
-          <li>Consumes `text/event-stream` and appends each `data:` token live.</li>
-          <li>Uses a stable `dashboard-chat` thread per authenticated user.</li>
-        </ul>
-      </aside>
     </main>
   );
 }

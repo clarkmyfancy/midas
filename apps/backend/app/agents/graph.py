@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 from typing_extensions import TypedDict
@@ -159,7 +160,12 @@ def get_checkpointer():
     return _checkpointer
 
 
-def build_reflection_graph():
+def supports_async_checkpointing(checkpointer: object) -> bool:
+    aget_tuple = getattr(type(checkpointer), "aget_tuple", None)
+    return aget_tuple is not None and aget_tuple is not BaseCheckpointSaver.aget_tuple
+
+
+def build_reflection_graph(*, for_async: bool = False):
     workflow = StateGraph(ReflectionState)
     registry = load_capabilities()
     reflection_coach = registry.resolve(ReflectionCoachInterface)
@@ -173,6 +179,9 @@ def build_reflection_graph():
 
     checkpointer = get_checkpointer()
     if checkpointer is None:
+        return workflow.compile()
+
+    if for_async and not supports_async_checkpointing(checkpointer):
         return workflow.compile()
 
     return workflow.compile(checkpointer=checkpointer)
@@ -202,7 +211,7 @@ def build_reflection_config(payload: ReflectionRequest) -> dict[str, dict[str, s
 async def astream_reflection_workflow(
     payload: ReflectionRequest,
 ) -> AsyncIterator[object]:
-    graph = build_reflection_graph()
+    graph = build_reflection_graph(for_async=True)
     async for chunk in graph.astream(
         build_reflection_input(payload),
         config=build_reflection_config(payload),

@@ -9,7 +9,7 @@ export function drainSseBuffer(buffer: string) {
     const payload = frame
       .split("\n")
       .filter((line) => line.startsWith("data:"))
-      .map((line) => line.slice(5).trimStart())
+      .map((line) => (line.startsWith("data: ") ? line.slice(6) : line.slice(5)))
       .join("\n");
 
     if (payload) {

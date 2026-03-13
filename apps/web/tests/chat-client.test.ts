@@ -26,6 +26,13 @@ describe("chat client", () => {
     });
   });
 
+  it("preserves leading spaces inside streamed tokens", () => {
+    expect(drainSseBuffer("data:  reports\n\n")).toEqual({
+      rest: "",
+      tokens: [" reports"],
+    });
+  });
+
   it("posts the reflection request and streams tokens in order", async () => {
     const onToken = vi.fn();
     const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
