@@ -30,8 +30,8 @@ def test_reflection_endpoint() -> None:
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
-    assert "data: Analyzing " in body
-    assert "data: Midas " in body
+    assert "data: - Semantic drift:" in body
+    assert "data: - HRV and sleep suggest strain" in body
 
 
 def test_capabilities_endpoint_defaults_to_core_mode() -> None:

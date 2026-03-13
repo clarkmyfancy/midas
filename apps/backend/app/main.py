@@ -1,5 +1,4 @@
 from pathlib import Path
-import re
 from collections.abc import AsyncIterator
 from typing import Annotated
 
@@ -36,24 +35,19 @@ app.add_middleware(
 
 load_capabilities()
 
-TOKEN_PATTERN = re.compile(r"\S+\s*")
-
-
-def iter_tokens(text: str) -> list[str]:
-    return TOKEN_PATTERN.findall(text) or [text]
-
 
 async def stream_reflection_events(payload: ReflectionRequest) -> AsyncIterator[str]:
     async for chunk in astream_reflection_workflow(payload):
-        for node_name, update in chunk.items():
-            if node_name == "habit_analyst":
-                for token in iter_tokens("Analyzing your journal against steps and sleep. "):
-                    yield f"data: {token}\n\n"
+        if not isinstance(chunk, tuple) or len(chunk) != 2:
+            continue
 
-            summary = update.get("summary")
-            if isinstance(summary, str):
-                for token in iter_tokens(summary):
-                    yield f"data: {token}\n\n"
+        mode, payload_chunk = chunk
+        if mode != "custom" or not isinstance(payload_chunk, dict):
+            continue
+
+        token = payload_chunk.get("token")
+        if isinstance(token, str) and token:
+            yield f"data: {token}\n\n"
 
 
 @app.get("/health")
