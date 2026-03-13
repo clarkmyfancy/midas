@@ -74,3 +74,33 @@ def test_reflection_endpoint_persists_canonical_journal_entry() -> None:
     )
     assert jobs_response.status_code == 200
     assert len(jobs_response.json()["projection_jobs"]) == 3
+
+
+def test_delete_endpoint_removes_canonical_entry() -> None:
+    access_token = register_user("delete-integration@example.com")
+
+    create_response = client.post(
+        "/v1/journal-entries",
+        json={"journal_entry": "Delete integration check", "goals": ["Protect recovery"]},
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert create_response.status_code == 200
+    entry_id = create_response.json()["entry"]["id"]
+
+    delete_response = client.delete(
+        f"/v1/journal-entries/{entry_id}",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert delete_response.status_code == 200
+    assert delete_response.json()["entry_id"] == entry_id
+
+    get_response = client.get(
+        f"/v1/journal-entries/{entry_id}",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    list_response = client.get(
+        "/v1/journal-entries",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert get_response.status_code == 404
+    assert list_response.json()["entries"] == []

@@ -24,13 +24,16 @@ from app.schemas.auth import (
 )
 from app.schemas.capabilities import CapabilityMapResponse
 from app.schemas.journal import (
+    DerivedStoreCleanupResponse,
     GraphNodeResponse,
     GraphObservationResponse,
     GraphRelationshipResponse,
+    JournalDeleteResponse,
     JournalEntryCreateRequest,
     JournalEntryListResponse,
     JournalEntryResponse,
     JournalIngestResponse,
+    MemorySettingsResponse,
     MemoryDebugResponse,
     ProjectionJobListResponse,
     ProjectionJobResponse,
@@ -52,6 +55,7 @@ from midas.core.entitlements import (
 from midas.core.loader import load_capabilities
 from midas.core.memory import (
     create_journal_entry_for_user,
+    delete_journal_entry_for_user,
     get_journal_entry_for_user,
     init_memory_storage,
     list_journal_entries_for_user,
@@ -61,6 +65,7 @@ from midas.core.projections import (
     GraphProjector,
     VECTOR_CLASS_NAME,
     WeaviateProjector,
+    delete_derived_artifacts,
     process_pending_projection_jobs,
 )
 
@@ -126,6 +131,12 @@ def build_memory_links() -> dict[str, str]:
     }
 
 
+def get_memory_settings() -> MemorySettingsResponse:
+    return MemorySettingsResponse(
+        auto_project_enabled=os.getenv("MIDAS_AUTO_PROJECT", "0") == "1",
+    )
+
+
 def serialize_graph_node(node: dict[str, object]) -> GraphNodeResponse:
     return GraphNodeResponse(
         node_id=str(node.get("id", "")),
@@ -161,6 +172,12 @@ async def stream_reflection_events(payload: ReflectionRequest) -> AsyncIterator[
 @app.get("/health")
 def healthcheck() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/api/v1/memory/settings", response_model=MemorySettingsResponse)
+@app.get("/v1/memory/settings", response_model=MemorySettingsResponse)
+def memory_settings() -> MemorySettingsResponse:
+    return get_memory_settings()
 
 
 @app.post("/api/v1/reflections")
@@ -240,6 +257,56 @@ def get_journal_entry(
     if entry is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Journal entry not found")
     return serialize_journal_entry(entry)
+
+
+@app.delete("/api/v1/journal-entries/{entry_id}", response_model=JournalDeleteResponse)
+@app.delete("/v1/journal-entries/{entry_id}", response_model=JournalDeleteResponse)
+def delete_journal_entry(
+    entry_id: str,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> JournalDeleteResponse:
+    deleted = delete_journal_entry_for_user(user.id, entry_id)
+    if deleted is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Journal entry not found")
+
+    entry, jobs = deleted
+    cleanup: list[DerivedStoreCleanupResponse] = []
+
+    try:
+        weaviate_result, graph_result = delete_derived_artifacts(entry, jobs)
+    except Exception as exc:
+        cleanup.append(
+            DerivedStoreCleanupResponse(
+                store="derived_cleanup",
+                success=False,
+                deleted_count=0,
+                error=str(exc),
+            )
+        )
+    else:
+        cleanup.append(
+            DerivedStoreCleanupResponse(
+                store="weaviate",
+                success=True,
+                deleted_count=len(weaviate_result.deleted_object_ids),
+                deleted_ids=weaviate_result.deleted_object_ids,
+            )
+        )
+        cleanup.append(
+            DerivedStoreCleanupResponse(
+                store="neo4j",
+                success=True,
+                deleted_count=len(graph_result.deleted_observation_ids) + graph_result.deleted_entities,
+                deleted_ids=graph_result.deleted_observation_ids,
+                details={
+                    "deleted_observation_ids": graph_result.deleted_observation_ids,
+                    "deleted_relationships": graph_result.deleted_relationships,
+                    "deleted_entities": graph_result.deleted_entities,
+                },
+            )
+        )
+
+    return JournalDeleteResponse(entry_id=entry.id, cleanup=cleanup)
 
 
 @app.get(
@@ -344,6 +411,7 @@ def debug_journal_entry(
             ],
             cypher_browser_url=graph.browser_url(),
         ),
+        settings=get_memory_settings(),
         links=build_memory_links(),
     )
 

@@ -43,3 +43,16 @@ def test_journal_ingestion_queues_expected_projection_types() -> None:
         job["projection_type"] for job in response.json()["projection_jobs"]
     }
     assert projection_types == set(PROJECTION_TYPES)
+
+
+def test_memory_settings_endpoint_reflects_auto_projection_flag(monkeypatch) -> None:
+    monkeypatch.setenv("MIDAS_AUTO_PROJECT", "1")
+
+    access_token = register_user("settings@example.com")
+    response = client.get(
+        "/v1/memory/settings",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"auto_project_enabled": True}

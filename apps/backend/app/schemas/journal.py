@@ -74,6 +74,10 @@ class ProjectionRunResponse(BaseModel):
     jobs: list[ProjectionJobResponse]
 
 
+class MemorySettingsResponse(BaseModel):
+    auto_project_enabled: bool
+
+
 class WeaviateArtifactResponse(BaseModel):
     projection_job_id: str
     object_id: str
@@ -104,9 +108,24 @@ class GraphObservationResponse(BaseModel):
     cypher_browser_url: str | None = None
 
 
+class DerivedStoreCleanupResponse(BaseModel):
+    store: str
+    success: bool
+    deleted_count: int
+    deleted_ids: list[str] = Field(default_factory=list)
+    details: dict[str, object] = Field(default_factory=dict)
+    error: str | None = None
+
+
+class JournalDeleteResponse(BaseModel):
+    entry_id: str
+    cleanup: list[DerivedStoreCleanupResponse]
+
+
 class MemoryDebugResponse(BaseModel):
     entry: JournalEntryResponse
     projection_jobs: list[ProjectionJobResponse]
     weaviate_artifacts: list[WeaviateArtifactResponse]
     graph: GraphObservationResponse
+    settings: MemorySettingsResponse
     links: dict[str, str]

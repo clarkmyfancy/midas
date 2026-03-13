@@ -72,6 +72,13 @@ class MemoryStore:
     def get_journal_entry(self, user_id: str, entry_id: str) -> JournalEntryRecord | None:
         raise NotImplementedError
 
+    def delete_journal_entry(
+        self,
+        user_id: str,
+        entry_id: str,
+    ) -> tuple[JournalEntryRecord, list[ProjectionJobRecord]] | None:
+        raise NotImplementedError
+
     def list_projection_jobs(
         self,
         user_id: str,
@@ -169,6 +176,40 @@ class MemoryMemoryStore(MemoryStore):
         if entry is None or entry.user_id != user_id:
             return None
         return entry
+
+    def delete_journal_entry(
+        self,
+        user_id: str,
+        entry_id: str,
+    ) -> tuple[JournalEntryRecord, list[ProjectionJobRecord]] | None:
+        with self._lock:
+            entry = self._entries_by_id.get(entry_id)
+            if entry is None or entry.user_id != user_id:
+                return None
+
+            job_ids = list(self._job_ids_by_user.get(user_id, []))
+            jobs = [
+                self._jobs_by_id[job_id]
+                for job_id in job_ids
+                if self._jobs_by_id[job_id].source_record_id == entry_id
+            ]
+
+            self._entries_by_id.pop(entry_id, None)
+            self._entry_ids_by_user[user_id] = [
+                current_entry_id
+                for current_entry_id in self._entry_ids_by_user.get(user_id, [])
+                if current_entry_id != entry_id
+            ]
+
+            for job in jobs:
+                self._jobs_by_id.pop(job.id, None)
+            self._job_ids_by_user[user_id] = [
+                job_id
+                for job_id in self._job_ids_by_user.get(user_id, [])
+                if job_id not in {job.id for job in jobs}
+            ]
+
+        return entry, jobs
 
     def list_projection_jobs(
         self,
@@ -426,6 +467,53 @@ class PostgresMemoryStore(MemoryStore):
             return None
         return self._build_entry(row)
 
+    def delete_journal_entry(
+        self,
+        user_id: str,
+        entry_id: str,
+    ) -> tuple[JournalEntryRecord, list[ProjectionJobRecord]] | None:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, user_id, journal_entry, goals_json, thread_id, steps, sleep_hours, hrv_ms, source, created_at
+                FROM journal_entries
+                WHERE id = %s AND user_id = %s
+                """,
+                (entry_id, user_id),
+            )
+            entry_row = cur.fetchone()
+            if entry_row is None:
+                return None
+
+            cur.execute(
+                """
+                SELECT id, user_id, source_record_id, source_record_type, projection_type, status, attempts, created_at, completed_at, last_error
+                FROM memory_projection_jobs
+                WHERE user_id = %s AND source_record_id = %s
+                ORDER BY created_at DESC
+                """,
+                (user_id, entry_id),
+            )
+            job_rows = cur.fetchall()
+
+            cur.execute(
+                """
+                DELETE FROM memory_projection_jobs
+                WHERE user_id = %s AND source_record_id = %s
+                """,
+                (user_id, entry_id),
+            )
+            cur.execute(
+                """
+                DELETE FROM journal_entries
+                WHERE id = %s AND user_id = %s
+                """,
+                (entry_id, user_id),
+            )
+            conn.commit()
+
+        return self._build_entry(entry_row), [self._build_job(row) for row in job_rows]
+
     def list_projection_jobs(
         self,
         user_id: str,
@@ -608,6 +696,13 @@ def list_journal_entries_for_user(user_id: str) -> list[JournalEntryRecord]:
 
 def get_journal_entry_for_user(user_id: str, entry_id: str) -> JournalEntryRecord | None:
     return get_memory_store().get_journal_entry(user_id, entry_id)
+
+
+def delete_journal_entry_for_user(
+    user_id: str,
+    entry_id: str,
+) -> tuple[JournalEntryRecord, list[ProjectionJobRecord]] | None:
+    return get_memory_store().delete_journal_entry(user_id, entry_id)
 
 
 def list_projection_jobs_for_user(

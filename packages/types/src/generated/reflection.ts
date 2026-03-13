@@ -27,6 +27,15 @@ export interface CapabilityMapResponse {
   capabilities: Record<string, boolean>;
 }
 
+export interface DerivedStoreCleanupResponse {
+  store: string;
+  success: boolean;
+  deleted_count: number;
+  deleted_ids?: string[];
+  details?: Record<string, unknown>;
+  error?: string | null;
+}
+
 export interface GraphNodeResponse {
   node_id: string;
   labels: string[];
@@ -46,6 +55,11 @@ export interface GraphRelationshipResponse {
   start_node_id: string;
   end_node_id: string;
   properties: Record<string, unknown>;
+}
+
+export interface JournalDeleteResponse {
+  entry_id: string;
+  cleanup: DerivedStoreCleanupResponse[];
 }
 
 export interface JournalEntryCreateRequest {
@@ -85,7 +99,12 @@ export interface MemoryDebugResponse {
   projection_jobs: ProjectionJobResponse[];
   weaviate_artifacts: WeaviateArtifactResponse[];
   graph: GraphObservationResponse;
+  settings: MemorySettingsResponse;
   links: Record<string, string>;
+}
+
+export interface MemorySettingsResponse {
+  auto_project_enabled: boolean;
 }
 
 export interface ProjectionJobListResponse {

@@ -43,6 +43,24 @@ def test_user_cannot_read_another_users_journal_entry_or_jobs() -> None:
     assert jobs_response.status_code == 404
 
 
+def test_user_cannot_delete_another_users_journal_entry() -> None:
+    owner_token = register_user("delete-owner@example.com")
+    viewer_token = register_user("delete-viewer@example.com")
+    entry_id = create_entry(owner_token, "Private entry to delete.")
+
+    delete_response = client.delete(
+        f"/v1/journal-entries/{entry_id}",
+        headers={"Authorization": f"Bearer {viewer_token}"},
+    )
+    owner_list_response = client.get(
+        "/v1/journal-entries",
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+
+    assert delete_response.status_code == 404
+    assert [entry["id"] for entry in owner_list_response.json()["entries"]] == [entry_id]
+
+
 def test_list_endpoint_only_returns_current_users_entries() -> None:
     first_token = register_user("first@example.com")
     second_token = register_user("second@example.com")

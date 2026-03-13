@@ -1,6 +1,7 @@
 "use client";
 
 import type {
+  MemorySettingsResponse,
   JournalEntryResponse,
   MemoryDebugResponse,
   ProjectionJobResponse,
@@ -10,7 +11,9 @@ import { useEffect, useState } from "react";
 
 import { ApiError } from "../lib/api";
 import {
+  deleteJournalEntry,
   createJournalEntry,
+  getMemorySettings,
   getMemoryDebug,
   listJournalEntries,
   listProjectionJobs,
@@ -29,6 +32,7 @@ export function MemoryPageShell() {
   const [jobs, setJobs] = useState<ProjectionJobResponse[]>([]);
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null);
   const [debugPayload, setDebugPayload] = useState<MemoryDebugResponse | null>(null);
+  const [settings, setSettings] = useState<MemorySettingsResponse | null>(null);
   const [journalEntry, setJournalEntry] = useState(
     "I stayed up late for work, slept badly, and skipped my workout.",
   );
@@ -55,8 +59,10 @@ export function MemoryPageShell() {
         listJournalEntries(session.accessToken),
         listProjectionJobs(session.accessToken),
       ]);
+      const settingsResponse = await getMemorySettings(session.accessToken);
       setEntries(entryResponse.entries);
       setJobs(jobResponse.projection_jobs);
+      setSettings(settingsResponse);
 
       const nextEntryId = selectedEntryId ?? entryResponse.entries[0]?.id ?? null;
       setSelectedEntryId(nextEntryId);
@@ -101,7 +107,12 @@ export function MemoryPageShell() {
           .filter(Boolean),
       });
       setSelectedEntryId(response.entry.id);
-      setStatusMessage(`Created entry ${response.entry.id} and queued ${response.projection_jobs.length} jobs.`);
+      if (settings?.auto_project_enabled) {
+        setStatusMessage(`Created entry ${response.entry.id}. Waiting for automatic projections to finish...`);
+        await waitForProjectionSettlement(response.entry.id);
+      } else {
+        setStatusMessage(`Created entry ${response.entry.id} and queued ${response.projection_jobs.length} jobs.`);
+      }
       await refresh();
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : "Failed to create journal entry.");
@@ -123,6 +134,47 @@ export function MemoryPageShell() {
       await refresh();
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : "Failed to run projection jobs.");
+    }
+  }
+
+  async function waitForProjectionSettlement(entryId: string) {
+    if (!session) {
+      return;
+    }
+
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const response = await listProjectionJobs(session.accessToken);
+      const entryJobs = response.projection_jobs.filter((job) => job.source_record_id === entryId);
+      setJobs(response.projection_jobs);
+      if (entryJobs.length > 0 && entryJobs.every((job) => job.status !== "pending")) {
+        setStatusMessage(
+          `Automatic projections settled for ${entryId}: ${entryJobs.map((job) => `${job.projection_type}=${job.status}`).join(", ")}.`,
+        );
+        return;
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 350));
+    }
+    setStatusMessage(`Entry ${entryId} was created, but some automatic projections are still pending.`);
+  }
+
+  async function handleDeleteEntry() {
+    if (!session || !selectedEntryId) {
+      return;
+    }
+
+    setError(null);
+    setStatusMessage(`Deleting ${selectedEntryId} and cleaning derived artifacts...`);
+    try {
+      const response = await deleteJournalEntry(session.accessToken, selectedEntryId);
+      const cleanupSummary = response.cleanup
+        .map((item) => `${item.store}=${item.success ? item.deleted_count : "error"}`)
+        .join(", ");
+      setSelectedEntryId(null);
+      setDebugPayload(null);
+      setStatusMessage(`Deleted ${response.entry_id}. Cleanup: ${cleanupSummary}.`);
+      await refresh();
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "Failed to delete journal entry.");
     }
   }
 
@@ -155,6 +207,9 @@ export function MemoryPageShell() {
             Write journal entries into Postgres, run queued projections, then inspect the derived
             vector and graph artifacts locally.
           </p>
+          <div className="memory-settings-chip">
+            Auto project: {settings?.auto_project_enabled ? "on" : "off"}
+          </div>
 
           <label className="label">
             Journal entry
@@ -181,6 +236,14 @@ export function MemoryPageShell() {
             <button className="button button-secondary" onClick={handleRunJobs} type="button">
               Run Projections
             </button>
+            <button
+              className="button button-secondary"
+              disabled={!selectedEntryId}
+              onClick={handleDeleteEntry}
+              type="button"
+            >
+              Delete Selected Entry
+            </button>
             <button className="ghost-button" onClick={() => void refresh()} type="button">
               Refresh
             </button>
@@ -193,6 +256,9 @@ export function MemoryPageShell() {
         <section className="panel memory-links-panel">
           <h2>Local services</h2>
           <p>Use these while the stack is running locally.</p>
+          <p className="memory-small-copy">
+            Current local mode: {settings?.auto_project_enabled ? "entries auto-project on write" : "manual projection run required"}
+          </p>
           <div className="memory-link-list">
             <a className="link-button" href="http://localhost:7474/browser/" rel="noreferrer" target="_blank">
               Open Neo4j Browser

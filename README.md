@@ -132,7 +132,7 @@ uv python install 3.13
 From the repository root:
 
 ```bash
-cd /Users/bronzeage/Desktop/Areas/🌎\ Thrivemind/Areas/Apps/Midas
+cd /path/to/Midas
 pnpm install
 ```
 
@@ -152,8 +152,9 @@ Important variables:
   - Required if you want live reflection generation through the OpenAI-backed habit analyst.
   - Without it, the memory projection system can still run, but live reflection/chat quality will be limited or fail where OpenAI is required.
 - `MIDAS_AUTO_PROJECT`
+  - `1` means journal entries and reflection writes will automatically fan out into Weaviate and Neo4j in local dev.
   - `0` means journal entries queue projection jobs and you run them manually from the Memory page.
-  - `1` means the backend will try to run projections automatically after entry creation.
+  - The checked-in local default is now `1`.
 
 If you want live model responses, edit `apps/backend/.env` and set:
 
@@ -207,6 +208,8 @@ This runs:
 - FastAPI backend
 - Next.js web app
 
+`pnpm dev:site` also exports `MIDAS_AUTO_PROJECT=1` by default unless you explicitly override it before the command.
+
 ### 7. Open the local surfaces
 
 Once the dev servers are up, open:
@@ -227,12 +230,15 @@ After the app is running:
 3. Open `http://localhost:3000`
 4. If you want to inspect storage internals, open `http://localhost:3000/memory`
 5. Create a journal entry from the Memory page
-6. Run projection jobs from the Memory page
-7. Inspect:
+6. Watch the Memory page settle the projection jobs automatically
+7. If you need to retry failed jobs, use the `Run Projections` button
+8. If you want to test data cleanup, use `Delete Selected Entry`
+9. Inspect:
    - canonical journal record
    - queued/completed projection jobs
    - Weaviate artifacts
    - Neo4j observation graph
+   - current memory mode (`Auto project: on|off`)
 
 ## Alternative Local Commands
 
@@ -241,13 +247,13 @@ After the app is running:
 ```bash
 cd apps/backend
 uv sync --python 3.13
-env UV_CACHE_DIR=/tmp/uv-cache uv run uvicorn app.main:app --reload
+MIDAS_AUTO_PROJECT=1 env UV_CACHE_DIR=/tmp/uv-cache uv run uvicorn app.main:app --reload
 ```
 
 ### Run web only
 
 ```bash
-cd /Users/bronzeage/Desktop/Areas/🌎\ Thrivemind/Areas/Apps/Midas
+cd /path/to/Midas
 pnpm --filter @midas/web dev
 ```
 
@@ -274,7 +280,7 @@ env UV_CACHE_DIR=/tmp/uv-cache uv run python -m compileall app tests scripts mid
 ### Web
 
 ```bash
-cd /Users/bronzeage/Desktop/Areas/🌎\ Thrivemind/Areas/Apps/Midas
+cd /path/to/Midas
 pnpm generate:types
 pnpm --filter @midas/web build
 pnpm --filter @midas/web typecheck
@@ -327,6 +333,43 @@ pnpm --filter @midas/web typecheck
 ### Reflection/chat is up but the model is not responding
 
 Check that `OPENAI_API_KEY` is set in `apps/backend/.env`, then restart the backend.
+
+### Entries are being created but the graph or vector artifacts never appear
+
+Check the Memory page first:
+
+- `http://localhost:3000/memory`
+- confirm it says `Auto project: on`
+- confirm the job cards for the selected entry moved from `pending` to `completed`
+
+If auto projection is off, either:
+
+```bash
+MIDAS_AUTO_PROJECT=1 pnpm dev:site
+```
+
+or set this in `apps/backend/.env`:
+
+```bash
+MIDAS_AUTO_PROJECT="1"
+```
+
+If jobs are still pending or failed, you can force a manual retry from the UI or with:
+
+```bash
+curl -X POST http://127.0.0.1:8000/v1/projection-jobs/run \
+  -H "Authorization: Bearer <your_access_token>"
+```
+
+### You deleted an entry and want to confirm the cleanup really happened
+
+After deleting from `http://localhost:3000/memory`, verify:
+
+- the entry disappeared from the journal list
+- the debug payload cleared for that entry
+- the delete status message shows cleanup counts for both `weaviate` and `neo4j`
+- the related Weaviate objects are gone from `http://localhost:8080/v1/objects`
+- the related Neo4j observation node is gone from `http://localhost:7474/browser/`
 
 Before publishing new code to a remote, run:
 

@@ -1,7 +1,9 @@
 import type {
+  JournalDeleteResponse,
   JournalEntryCreateRequest,
   JournalEntryListResponse,
   JournalIngestResponse,
+  MemorySettingsResponse,
   MemoryDebugResponse,
   ProjectionJobListResponse,
   ProjectionRunResponse,
@@ -30,6 +32,17 @@ export function listJournalEntries(accessToken: string, fetcher: typeof fetch = 
 export function listProjectionJobs(accessToken: string, fetcher: typeof fetch = fetch) {
   return requestJson<ProjectionJobListResponse>(
     "/api/v1/projection-jobs",
+    {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      method: "GET",
+    },
+    fetcher,
+  );
+}
+
+export function getMemorySettings(accessToken: string, fetcher: typeof fetch = fetch) {
+  return requestJson<MemorySettingsResponse>(
+    "/api/v1/memory/settings",
     {
       headers: { Authorization: `Bearer ${accessToken}` },
       method: "GET",
@@ -79,6 +92,21 @@ export function getMemoryDebug(
     {
       headers: { Authorization: `Bearer ${accessToken}` },
       method: "GET",
+    },
+    fetcher,
+  );
+}
+
+export function deleteJournalEntry(
+  accessToken: string,
+  entryId: string,
+  fetcher: typeof fetch = fetch,
+) {
+  return requestJson<JournalDeleteResponse>(
+    `/api/v1/journal-entries/${entryId}`,
+    {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      method: "DELETE",
     },
     fetcher,
   );

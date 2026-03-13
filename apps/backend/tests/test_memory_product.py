@@ -60,3 +60,24 @@ def test_ingest_response_exposes_processing_state_immediately() -> None:
     assert payload["projection_jobs"]
     assert all(job["status"] == "pending" for job in payload["projection_jobs"])
     assert all(job["source_record_id"] == payload["entry"]["id"] for job in payload["projection_jobs"])
+
+
+def test_debug_payload_exposes_memory_settings() -> None:
+    access_token = register_user("debug-settings@example.com")
+
+    create_response = client.post(
+        "/v1/journal-entries",
+        json={"journal_entry": "Debug payload settings check", "goals": []},
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert create_response.status_code == 200
+    entry_id = create_response.json()["entry"]["id"]
+
+    debug_response = client.get(
+        f"/v1/journal-entries/{entry_id}/debug",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+
+    assert debug_response.status_code == 200
+    assert "settings" in debug_response.json()
+    assert debug_response.json()["settings"]["auto_project_enabled"] in {True, False}

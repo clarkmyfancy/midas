@@ -29,6 +29,7 @@ GRAPH_ENTITY_LABELS = {
     "context": "Context",
     "goal": "Goal",
     "habit": "Habit",
+    "health_state": "HealthState",
     "mood": "Mood",
     "person": "Person",
     "place": "Place",
@@ -51,11 +52,17 @@ ALLOWED_RELATIONSHIPS = {
 
 
 class ExtractedEntity(BaseModel):
-    entity_type: str = Field(..., description="One of person, place, context, mood, project, habit, goal, substance.")
+    entity_type: str = Field(
+        ...,
+        description="One of person, place, context, mood, project, habit, goal, substance, health_state.",
+    )
     name: str = Field(..., min_length=1)
     canonical_name: str = Field(..., min_length=1)
     confidence: float = Field(..., ge=0, le=1)
     evidence: str = Field(..., min_length=1)
+    aliases: list[str] = Field(default_factory=list)
+    needs_clarification: bool = False
+    resolution_notes: str | None = None
 
 
 class ExtractedRelationship(BaseModel):
@@ -80,6 +87,18 @@ class ProjectionRunResult:
     jobs: list[ProjectionJobRecord]
 
 
+@dataclass(frozen=True)
+class WeaviateCleanupResult:
+    deleted_object_ids: list[str]
+
+
+@dataclass(frozen=True)
+class GraphCleanupResult:
+    deleted_observation_ids: list[str]
+    deleted_relationships: int
+    deleted_entities: int
+
+
 def normalize_name(value: str) -> str:
     normalized = re.sub(r"[^a-z0-9]+", "_", value.strip().lower()).strip("_")
     return normalized or "unknown"
@@ -88,6 +107,154 @@ def normalize_name(value: str) -> str:
 def sanitize_relationship_type(value: str) -> str:
     lowered = normalize_name(value)
     return lowered if lowered in ALLOWED_RELATIONSHIPS else "about"
+
+
+PERSON_ALIAS_MAP = {
+    "josh": "joshua",
+    "joshua": "joshua",
+    "matt": "matthew",
+    "matthew": "matthew",
+    "mike": "michael",
+    "michael": "michael",
+    "alex": "alexander",
+    "alexander": "alexander",
+    "sam": "samuel",
+    "samuel": "samuel",
+    "ben": "benjamin",
+    "benjamin": "benjamin",
+    "abby": "abigail",
+    "abigail": "abigail",
+}
+PERSON_STOPWORDS = {"After", "Before", "When", "While", "Because", "Later", "Then", "Today", "Yesterday"}
+KINSHIP_TITLES = {
+    "brother",
+    "sister",
+    "girlfriend",
+    "boyfriend",
+    "partner",
+    "wife",
+    "husband",
+    "mom",
+    "mother",
+    "dad",
+    "father",
+    "friend",
+    "manager",
+    "boss",
+    "coworker",
+    "coworkers",
+    "therapist",
+}
+PLACE_PATTERNS = {
+    "home": "home",
+    "work": "work",
+    "office": "office",
+    "park": "park",
+    "gym": "gym",
+    "kitchen": "kitchen",
+    "bedroom": "bedroom",
+    "bed": "bed",
+    "water cooler": "water cooler",
+}
+CONTEXT_PATTERNS = {
+    "meeting": "meeting",
+    "meetings": "meeting",
+    "1:1": "one_on_one",
+    "standup": "standup",
+    "commute": "commute",
+    "call": "call",
+    "deadline": "deadline",
+    "argument": "argument",
+    "interview": "interview",
+    "presentation": "presentation",
+}
+PROJECT_PATTERNS = {
+    "deck": "deck",
+    "presentation": "presentation",
+    "launch": "launch",
+    "roadmap": "roadmap",
+    "proposal": "proposal",
+    "sprint": "sprint",
+    "project": "project",
+}
+HABIT_PATTERNS = {
+    "workout": "workout",
+    "gym": "workout",
+    "run": "running",
+    "walk": "walking",
+    "journal": "journaling",
+    "meditate": "meditation",
+    "sleep": "sleep",
+    "stretch": "stretching",
+}
+MOOD_PATTERNS = {
+    "ashamed": "ashamed",
+    "anxious": "anxious",
+    "tired": "tired",
+    "scattered": "scattered",
+    "irritable": "irritable",
+    "guilty": "guilty",
+    "overwhelmed": "overwhelmed",
+    "wired": "wired",
+    "drained": "drained",
+    "resentful": "resentful",
+}
+SUBSTANCE_PATTERNS = {
+    "weed": "weed",
+    "alcohol": "alcohol",
+    "medication": "medication",
+    "caffeine": "caffeine",
+    "coffee": "coffee",
+    "nicotine": "nicotine",
+}
+HEALTH_PATTERNS = {
+    "poor sleep": "poor_sleep",
+    "slept badly": "poor_sleep",
+    "slept poorly": "poor_sleep",
+    "low hrv": "low_hrv",
+    "exhausted": "exhaustion",
+    "burned out": "burnout",
+    "low energy": "low_energy",
+}
+NEGATIVE_HABIT_TERMS = ("skipped", "missed", "avoided", "blew off", "didn't")
+
+
+def display_name_from_canonical(value: str) -> str:
+    return value.replace("_", " ").strip() or value
+
+
+def canonicalize_entity(entity_type: str, raw_name: str) -> tuple[str, list[str], bool, str | None]:
+    cleaned = re.sub(r"\s+", " ", raw_name.strip())
+    lowered = cleaned.lower()
+    if entity_type == "person":
+        tokens = [token for token in re.split(r"[\s\-]+", lowered) if token]
+        if tokens:
+            canonical_first = PERSON_ALIAS_MAP.get(tokens[0], tokens[0])
+            canonical = normalize_name(" ".join([canonical_first, *tokens[1:]]))
+            needs_clarification = canonical_first != tokens[0] and len(tokens) == 1
+            note = (
+                f"Normalized alias '{tokens[0]}' to '{canonical_first}'."
+                if canonical_first != tokens[0]
+                else None
+            )
+            return canonical, [cleaned], needs_clarification, note
+    return normalize_name(cleaned), [cleaned], False, None
+
+
+def split_sentences(text: str) -> list[str]:
+    parts = re.split(r"(?<=[.!?])\s+|\n+", text)
+    return [part.strip() for part in parts if part.strip()]
+
+
+def extract_phrase(pattern: str, text: str) -> list[str]:
+    matches = re.findall(pattern, text, flags=re.IGNORECASE)
+    results: list[str] = []
+    for match in matches:
+        value = match if isinstance(match, str) else " ".join(match)
+        normalized = re.sub(r"\s+", " ", value.strip(" .,!?:;"))
+        if normalized:
+            results.append(normalized)
+    return results
 
 
 def deterministic_vector(text: str, *, dimensions: int = 16) -> list[float]:
@@ -217,6 +384,18 @@ class WeaviateProjector:
         except RuntimeError:
             return None
 
+    def delete_objects(self, object_ids: list[str]) -> WeaviateCleanupResult:
+        deleted_object_ids: list[str] = []
+        for object_id in object_ids:
+            try:
+                call_json_api("DELETE", f"{self.base_url}/v1/objects/{object_id}")
+            except RuntimeError as exc:
+                if "404" in str(exc):
+                    continue
+                raise
+            deleted_object_ids.append(object_id)
+        return WeaviateCleanupResult(deleted_object_ids=deleted_object_ids)
+
     def object_url(self, object_id: str) -> str:
         return f"{self.base_url}/v1/objects/{object_id}"
 
@@ -224,62 +403,238 @@ class WeaviateProjector:
 def heuristic_extract_graph(entry: JournalEntryRecord) -> GraphExtraction:
     text = entry.journal_entry
     lowered = text.lower()
-    entities: list[ExtractedEntity] = []
-    relationships: list[ExtractedRelationship] = []
+    entity_index: dict[tuple[str, str], ExtractedEntity] = {}
+    relationships: dict[tuple[str, str, str], ExtractedRelationship] = {}
 
-    def add_entity(entity_type: str, name: str, confidence: float, evidence: str) -> None:
-        canonical_name = normalize_name(name)
-        if any(item.canonical_name == canonical_name for item in entities):
-            return
-        entities.append(
-            ExtractedEntity(
+    def add_entity(
+        entity_type: str,
+        name: str,
+        confidence: float,
+        evidence: str,
+        *,
+        needs_clarification: bool = False,
+        resolution_notes: str | None = None,
+    ) -> ExtractedEntity:
+        canonical_name, aliases, canonical_needs_clarification, canonical_note = canonicalize_entity(
+            entity_type,
+            name,
+        )
+        key = (entity_type, canonical_name)
+        current = entity_index.get(key)
+        resolved_note = resolution_notes or canonical_note
+        resolved_clarification = needs_clarification or canonical_needs_clarification
+        display_name = name.strip() or display_name_from_canonical(canonical_name)
+        if current is None:
+            current = ExtractedEntity(
                 entity_type=entity_type,
-                name=name,
+                name=display_name,
                 canonical_name=canonical_name,
                 confidence=confidence,
                 evidence=evidence,
+                aliases=aliases,
+                needs_clarification=resolved_clarification,
+                resolution_notes=resolved_note,
             )
+        else:
+            current = ExtractedEntity(
+                entity_type=current.entity_type,
+                name=current.name if len(current.name) >= len(display_name) else display_name,
+                canonical_name=current.canonical_name,
+                confidence=max(current.confidence, confidence),
+                evidence=current.evidence if len(current.evidence) >= len(evidence) else evidence,
+                aliases=sorted({*current.aliases, *aliases}),
+                needs_clarification=current.needs_clarification or resolved_clarification,
+                resolution_notes=current.resolution_notes or resolved_note,
+            )
+        entity_index[key] = current
+        return current
+
+    def add_relationship(
+        source_entity: ExtractedEntity,
+        target_entity: ExtractedEntity,
+        relationship_type: str,
+        confidence: float,
+        evidence: str,
+    ) -> None:
+        if source_entity.canonical_name == target_entity.canonical_name:
+            return
+        relationship_key = (
+            source_entity.canonical_name,
+            target_entity.canonical_name,
+            sanitize_relationship_type(relationship_type),
         )
+        current = relationships.get(relationship_key)
+        if current is None or confidence > current.confidence:
+            relationships[relationship_key] = ExtractedRelationship(
+                source_canonical_name=source_entity.canonical_name,
+                target_canonical_name=target_entity.canonical_name,
+                relationship_type=relationship_key[2],
+                confidence=confidence,
+                evidence=evidence,
+            )
 
-    mood_keywords = {"ashamed": "ashamed", "anxious": "anxious", "tired": "tired", "scattered": "scattered"}
-    place_keywords = {"home": "home", "work": "work", "park": "park"}
-    substance_keywords = {"weed": "weed", "alcohol": "alcohol", "medication": "medication"}
-    context_keywords = {"meeting": "meeting", "water cooler": "water cooler", "commute": "commute"}
+    for token, label in MOOD_PATTERNS.items():
+        if token in lowered:
+            add_entity("mood", label, 0.72, f"Mentioned mood pattern '{token}'.")
+    for token, label in PLACE_PATTERNS.items():
+        if token in lowered:
+            add_entity("place", label, 0.7, f"Mentioned place pattern '{token}'.")
+    for token, label in CONTEXT_PATTERNS.items():
+        if token in lowered:
+            add_entity("context", label, 0.69, f"Mentioned context pattern '{token}'.")
+    for token, label in PROJECT_PATTERNS.items():
+        if token in lowered:
+            add_entity("project", label, 0.66, f"Mentioned project pattern '{token}'.")
+    for token, label in HABIT_PATTERNS.items():
+        if token in lowered:
+            add_entity("habit", label, 0.67, f"Mentioned habit pattern '{token}'.")
+    for token, label in SUBSTANCE_PATTERNS.items():
+        if token in lowered:
+            add_entity("substance", label, 0.75, f"Mentioned substance pattern '{token}'.")
+    for token, label in HEALTH_PATTERNS.items():
+        if token in lowered:
+            add_entity("health_state", label, 0.78, f"Mentioned health pattern '{token}'.")
 
-    for token, label in mood_keywords.items():
-        if token in lowered:
-            add_entity("mood", label, 0.72, f"Mentioned mood keyword '{token}'")
-    for token, label in place_keywords.items():
-        if token in lowered:
-            add_entity("place", label, 0.7, f"Mentioned place keyword '{token}'")
-    for token, label in substance_keywords.items():
-        if token in lowered:
-            add_entity("substance", label, 0.75, f"Mentioned substance keyword '{token}'")
-    for token, label in context_keywords.items():
-        if token in lowered:
-            add_entity("context", label, 0.68, f"Mentioned context keyword '{token}'")
+    if entry.sleep_hours is not None:
+        if entry.sleep_hours < 6:
+            add_entity("health_state", "poor_sleep", 0.93, "Derived from sleep_hours below 6.")
+        elif entry.sleep_hours >= 7.5:
+            add_entity("health_state", "strong_sleep", 0.9, "Derived from sleep_hours at or above 7.5.")
+    if entry.hrv_ms is not None:
+        if entry.hrv_ms < 35:
+            add_entity("health_state", "low_hrv", 0.92, "Derived from hrv_ms below 35.")
+        elif entry.hrv_ms >= 55:
+            add_entity("health_state", "high_hrv", 0.88, "Derived from hrv_ms at or above 55.")
+    if entry.steps is not None and entry.steps < 4000:
+        add_entity("habit", "low_movement", 0.83, "Derived from steps below 4000.")
 
     for goal in entry.goals:
-        add_entity("goal", goal, 0.94, "Derived from explicit goals payload")
+        add_entity("goal", goal, 0.96, "Derived from explicit goals payload.")
 
-    capitalized_names = re.findall(r"\b[A-Z][a-z]+\b", entry.journal_entry)
-    for name in capitalized_names:
-        add_entity("person", name, 0.55, f"Capitalized token '{name}' may refer to a person")
+    for role in KINSHIP_TITLES:
+        if re.search(rf"\b{re.escape(role)}\b", lowered):
+            add_entity("person", role, 0.8, f"Mentioned person role '{role}'.")
 
-    if entities:
-        first_entity = entities[0]
-        relationships.append(
+    for candidate in extract_phrase(r"\b(?:with|to|texted|called|argued with|talked to)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)", text):
+        add_entity("person", candidate, 0.76, f"Named person mention '{candidate}'.")
+    for candidate in re.findall(r"\b[A-Z][a-z]+\b", text):
+        if candidate not in {"I", *PERSON_STOPWORDS}:
+            add_entity("person", candidate, 0.58, f"Capitalized name candidate '{candidate}'.")
+
+    for candidate in extract_phrase(r"\b(?:at|in|to)\s+the\s+([a-z][a-z\s]{2,30})", lowered):
+        if candidate in PLACE_PATTERNS or candidate in CONTEXT_PATTERNS:
+            entity_type = "place" if candidate in PLACE_PATTERNS else "context"
+            add_entity(entity_type, candidate, 0.64, f"Derived from location phrase '{candidate}'.")
+
+    for candidate in extract_phrase(r"\bworking on\s+([a-z0-9][a-z0-9\s-]{2,40})", lowered):
+        add_entity("project", candidate, 0.68, f"Derived from 'working on {candidate}'.")
+
+    sentences = split_sentences(text)
+    entities = list(entity_index.values())
+
+    def entity_position(sentence: str, entity: ExtractedEntity) -> int:
+        candidates = [entity.name, entity.canonical_name.replace("_", " "), *entity.aliases]
+        lowered_sentence = sentence.lower()
+        positions = [
+            lowered_sentence.find(candidate.lower())
+            for candidate in candidates
+            if candidate and lowered_sentence.find(candidate.lower()) >= 0
+        ]
+        return min(positions) if positions else 10**9
+
+    for sentence in sentences:
+        sentence_lower = sentence.lower()
+        sentence_entities = [
+            entity
+            for entity in entities
+            if any(alias.lower() in sentence_lower for alias in [entity.name, *entity.aliases, entity.canonical_name.replace("_", " ")])
+        ]
+        sentence_entities.sort(key=lambda entity: entity_position(sentence, entity))
+        if len(sentence_entities) < 2:
+            continue
+
+        ordered_pairs = list(zip(sentence_entities, sentence_entities[1:]))
+        if "after" in sentence_lower:
+            for source_entity, target_entity in ordered_pairs:
+                add_relationship(source_entity, target_entity, "led_up_to", 0.71, f"Sequential 'after' pattern in '{sentence}'.")
+        if "before" in sentence_lower:
+            for source_entity, target_entity in ordered_pairs:
+                add_relationship(source_entity, target_entity, "precedes", 0.69, f"Sequential 'before' pattern in '{sentence}'.")
+        if any(token in sentence_lower for token in ("because", "due to", "from")):
+            for source_entity, target_entity in ordered_pairs:
+                add_relationship(source_entity, target_entity, "contributed_to", 0.72, f"Causal phrase in '{sentence}'.")
+        if "triggered" in sentence_lower:
+            for source_entity, target_entity in ordered_pairs:
+                add_relationship(source_entity, target_entity, "triggered_by", 0.68, f"Trigger phrase in '{sentence}'.")
+        if any(token in sentence_lower for token in ("helped", "supported", "made it easier")):
+            for source_entity, target_entity in ordered_pairs:
+                add_relationship(source_entity, target_entity, "supported", 0.7, f"Support phrase in '{sentence}'.")
+
+        contexts = [entity for entity in sentence_entities if entity.entity_type in {"context", "project", "place"}]
+        impacted = [entity for entity in sentence_entities if entity.entity_type in {"mood", "habit", "health_state"}]
+        for source_entity in contexts:
+            for target_entity in impacted:
+                add_relationship(source_entity, target_entity, "affected", 0.62, f"Shared sentence context in '{sentence}'.")
+
+        substances = [entity for entity in sentence_entities if entity.entity_type == "substance"]
+        for source_entity in substances:
+            for target_entity in impacted:
+                add_relationship(source_entity, target_entity, "affected", 0.66, f"Substance linked to state in '{sentence}'.")
+
+        goals = [entity for entity in sentence_entities if entity.entity_type == "goal"]
+        habits = [entity for entity in sentence_entities if entity.entity_type == "habit"]
+        if any(token in sentence_lower for token in NEGATIVE_HABIT_TERMS + ("ashamed", "guilty")):
+            for habit in habits:
+                for goal in goals:
+                    add_relationship(habit, goal, "conflicts_with", 0.74, f"Negative habit signal conflicts with goal in '{sentence}'.")
+
+        people = [entity for entity in sentence_entities if entity.entity_type == "person"]
+        moods = [entity for entity in sentence_entities if entity.entity_type == "mood"]
+        for person in people:
+            for mood in moods:
+                add_relationship(person, mood, "affected", 0.63, f"Person-state connection in '{sentence}'.")
+
+    goal_entities = [entity for entity in entities if entity.entity_type == "goal"]
+    health_entities = [entity for entity in entities if entity.entity_type == "health_state"]
+    habit_entities = [entity for entity in entities if entity.entity_type == "habit"]
+    if goal_entities and health_entities:
+        for health_entity in health_entities:
+            for goal_entity in goal_entities:
+                add_relationship(health_entity, goal_entity, "affected", 0.58, "Biometric context linked to active goal.")
+    if health_entities and habit_entities:
+        for health_entity in health_entities:
+            for habit_entity in habit_entities:
+                add_relationship(health_entity, habit_entity, "affected", 0.61, "Health state linked to behavior in the same entry.")
+
+    entities = list(entity_index.values())
+    relationships_list = list(relationships.values())
+    if not relationships_list and entities:
+        anchor = sorted(
+            entities,
+            key=lambda entity: (entity.entity_type != "goal", -entity.confidence),
+        )[0]
+        relationships_list.append(
             ExtractedRelationship(
                 source_canonical_name="observation",
-                target_canonical_name=first_entity.canonical_name,
+                target_canonical_name=anchor.canonical_name,
                 relationship_type="about",
                 confidence=0.6,
-                evidence="Fallback observation link",
+                evidence="Fallback observation link.",
             )
         )
 
-    summary = build_episode_summary(entry)
-    return GraphExtraction(summary=summary, entities=entities, relationships=relationships)
+    prominent_entities = sorted(
+        entities,
+        key=lambda entity: (entity.entity_type != "goal", -entity.confidence, entity.name),
+    )[:4]
+    if prominent_entities:
+        summary = "Key factors: " + ", ".join(
+            f"{entity.entity_type.replace('_', ' ')}={display_name_from_canonical(entity.canonical_name)}"
+            for entity in prominent_entities
+        )
+    else:
+        summary = build_episode_summary(entry)
+    return GraphExtraction(summary=summary, entities=entities, relationships=relationships_list)
 
 
 class GraphProjector:
@@ -323,12 +678,17 @@ class GraphProjector:
         llm = ChatOpenAI(model="gpt-4o-mini", temperature=0).with_structured_output(GraphExtraction)
         prompt = "\n".join(
             [
-                "Extract a compact knowledge graph from this journal entry.",
-                "Use only entity types: person, place, context, mood, project, habit, goal, substance.",
+                "Extract a compact but personally useful knowledge graph from this journal entry.",
+                "Use only entity types: person, place, context, mood, project, habit, goal, substance, health_state.",
                 "Use only relationship types: affected, supported, conflicts_with, led_up_to, triggered_by, precedes, causes, recurs, about, contributed_to, experienced.",
-                "Return confidence scores and preserve concise evidence.",
+                "Canonicalize aliases when they likely refer to the same thing, for example Josh and Joshua.",
+                "If an alias merge is plausible but uncertain, set needs_clarification=true and explain why in resolution_notes.",
+                "Return concise evidence grounded in the journal text or biometric payload. Do not invent entities.",
                 f"Journal entry: {entry.journal_entry}",
                 f"Goals: {', '.join(entry.goals) if entry.goals else 'None provided'}",
+                f"Sleep hours: {entry.sleep_hours if entry.sleep_hours is not None else 'unknown'}",
+                f"HRV ms: {entry.hrv_ms if entry.hrv_ms is not None else 'unknown'}",
+                f"Steps: {entry.steps if entry.steps is not None else 'unknown'}",
             ]
         )
         return llm.invoke(prompt)
@@ -372,11 +732,25 @@ class GraphProjector:
                     e.entity_type = $entity_type,
                     e.canonical_name = $canonical_name,
                     e.display_name = $display_name
+                SET e.aliases = CASE
+                    WHEN e.aliases IS NULL OR size(e.aliases) = 0 THEN $aliases
+                    ELSE reduce(acc = e.aliases, alias IN $aliases |
+                        CASE WHEN alias IN acc THEN acc ELSE acc + alias END)
+                  END,
+                    e.needs_clarification = coalesce(e.needs_clarification, false) OR $needs_clarification,
+                    e.resolution_notes = coalesce(e.resolution_notes, $resolution_notes),
+                    e.observation_count = coalesce(e.observation_count, 0) + 1,
+                    e.last_seen_at = $created_at,
+                    e.max_confidence = CASE
+                        WHEN e.max_confidence IS NULL OR e.max_confidence < $confidence THEN $confidence
+                        ELSE e.max_confidence
+                    END
                 WITH e
                 MATCH (o:Observation {{id: $observation_id}})
                 MERGE (o)-[r:OBSERVED {{source_record_id: $source_record_id, entity_key: $entity_key}}]->(e)
                 SET r.confidence = $confidence,
-                    r.evidence = $evidence
+                    r.evidence = $evidence,
+                    r.entity_type = $entity_type
                 """,
                 {
                     "entity_key": entity_key,
@@ -384,8 +758,12 @@ class GraphProjector:
                     "entity_type": entity.entity_type,
                     "canonical_name": entity.canonical_name,
                     "display_name": entity.name,
+                    "aliases": entity.aliases,
+                    "needs_clarification": entity.needs_clarification,
+                    "resolution_notes": entity.resolution_notes,
                     "observation_id": observation_id,
                     "source_record_id": entry.id,
+                    "created_at": entry.created_at.isoformat(),
                     "confidence": entity.confidence,
                     "evidence": entity.evidence,
                 },
@@ -413,7 +791,8 @@ class GraphProjector:
                 MATCH (target {{{target_match_field}: $target_key}})
                 MERGE (source)-[r:{relationship_type} {{source_record_id: $source_record_id, observation_id: $observation_id}}]->(target)
                 SET r.confidence = $confidence,
-                    r.evidence = $evidence
+                    r.evidence = $evidence,
+                    r.provenance = $provenance
                 """,
                 {
                     "source_key": known_entities[relation.source_canonical_name]["key"],
@@ -422,8 +801,79 @@ class GraphProjector:
                     "observation_id": observation_id,
                     "confidence": relation.confidence,
                     "evidence": relation.evidence,
+                    "provenance": f"journal_entry:{entry.id}",
                 },
             )
+
+    def delete_observation(self, source_record_id: str, user_id: str) -> GraphCleanupResult:
+        result = self._query(
+            """
+            MATCH (o:Observation {source_record_id: $source_record_id, user_id: $user_id})
+            RETURN collect(o.id) AS observation_ids
+            """,
+            {"source_record_id": source_record_id, "user_id": user_id},
+        )
+        rows = result.get("results", [{}])[0].get("data", [])
+        if not rows:
+            return GraphCleanupResult(
+                deleted_observation_ids=[],
+                deleted_relationships=0,
+                deleted_entities=0,
+            )
+        observation_ids = rows[0].get("row", [[]])[0]
+        if not observation_ids:
+            return GraphCleanupResult(
+                deleted_observation_ids=[],
+                deleted_relationships=0,
+                deleted_entities=0,
+            )
+
+        deleted_relationships_result = self._query(
+            """
+            MATCH ()-[r]-()
+            WHERE r.source_record_id = $source_record_id OR r.observation_id IN $observation_ids
+            WITH collect(r) AS relationships
+            FOREACH (relationship IN relationships | DELETE relationship)
+            RETURN size(relationships) AS deleted_relationships
+            """,
+            {
+                "source_record_id": source_record_id,
+                "observation_ids": observation_ids,
+            },
+        )
+        deleted_relationships = 0
+        deleted_relationship_rows = deleted_relationships_result.get("results", [{}])[0].get("data", [])
+        if deleted_relationship_rows:
+            deleted_relationships = int(deleted_relationship_rows[0].get("row", [0])[0])
+
+        self._query(
+            """
+            MATCH (o:Observation {source_record_id: $source_record_id, user_id: $user_id})
+            DETACH DELETE o
+            """,
+            {"source_record_id": source_record_id, "user_id": user_id},
+        )
+
+        deleted_entities_result = self._query(
+            """
+            MATCH (e:Entity {user_id: $user_id})
+            WHERE NOT (e)--()
+            WITH collect(e) AS entities
+            FOREACH (entity IN entities | DELETE entity)
+            RETURN size(entities) AS deleted_entities
+            """,
+            {"user_id": user_id},
+        )
+        deleted_entities = 0
+        deleted_entity_rows = deleted_entities_result.get("results", [{}])[0].get("data", [])
+        if deleted_entity_rows:
+            deleted_entities = int(deleted_entity_rows[0].get("row", [0])[0])
+
+        return GraphCleanupResult(
+            deleted_observation_ids=[str(item) for item in observation_ids],
+            deleted_relationships=deleted_relationships,
+            deleted_entities=deleted_entities,
+        )
 
     def fetch_observation(self, source_record_id: str, user_id: str) -> dict[str, Any]:
         result = self._query(
@@ -500,3 +950,15 @@ def process_pending_projection_jobs(*, limit: int = 10, user_id: str | None = No
         failed_jobs=len(failed),
         jobs=[*completed, *failed],
     )
+
+
+def delete_derived_artifacts(
+    entry: JournalEntryRecord,
+    jobs: list[ProjectionJobRecord],
+) -> tuple[WeaviateCleanupResult, GraphCleanupResult]:
+    weaviate_job_ids = [job.id for job in jobs if job.projection_type.startswith("weaviate_")]
+    weaviate = WeaviateProjector()
+    graph = GraphProjector()
+    weaviate_result = weaviate.delete_objects(weaviate_job_ids)
+    graph_result = graph.delete_observation(entry.id, entry.user_id)
+    return weaviate_result, graph_result
