@@ -330,7 +330,7 @@ def replace_whole_word(text: str, source: str, target: str) -> str:
     return pattern.sub(target, text)
 
 
-def fallback_refresh_assistant_reply(
+def rewrite_saved_assistant_reply(
     *,
     user_id: str,
     source_entry,
@@ -390,6 +390,18 @@ def find_entries_affected_by_clarification(user_id: str, task) -> list[object]:
         for entry in entries_by_id.values()
         if pattern.search(entry.journal_entry.lower())
     ]
+    graph = GraphProjector()
+    raw_canonical_name = re.sub(r"[^a-z0-9]+", "_", task.raw_name.strip().lower()).strip("_")
+    graph_lookup = getattr(graph, "list_source_record_ids_for_entity", None)
+    if callable(graph_lookup):
+        for source_record_id in graph_lookup(
+            user_id=user_id,
+            entity_type=task.entity_type,
+            canonical_name=raw_canonical_name,
+        ):
+            graph_entry = entries_by_id.get(source_record_id)
+            if graph_entry is not None and graph_entry not in affected_entries:
+                affected_entries.append(graph_entry)
     if source_entry is not None and source_entry not in affected_entries:
         affected_entries.append(source_entry)
     affected_entries.sort(key=lambda entry: entry.created_at)
@@ -551,27 +563,26 @@ def resolve_clarification(
 
     source_entry = get_journal_entry_for_user(user.id, task.source_record_id)
     if source_entry and source_entry.thread_id and refresh_status == "refreshed":
-        try:
-            reflection = run_reflection_workflow(
-                build_reflection_request_for_entry(
-                    source_entry,
-                    thread_id=f"user:{user.id}:{source_entry.thread_id}",
-                )
+        if rewrite_saved_assistant_reply(user_id=user.id, source_entry=source_entry, task=task):
+            refresh_message = (
+                "Memory refreshed. Neo4j, Weaviate, and the stored assistant reply were updated."
             )
-            replace_chat_message_for_user(
-                user_id=user.id,
-                source_record_id=source_entry.id,
-                role="assistant",
-                content=render_reflection_text(reflection.findings, reflection.summary),
-            )
-        except Exception:
-            logger.exception("Assistant reply refresh failed for entry %s", source_entry.id)
-            if fallback_refresh_assistant_reply(user_id=user.id, source_entry=source_entry, task=task):
-                refresh_status = "refreshed"
-                refresh_message = (
-                    "Memory refreshed. Neo4j and Weaviate were updated, and the stored assistant reply was updated with a fallback rewrite."
+        else:
+            try:
+                reflection = run_reflection_workflow(
+                    build_reflection_request_for_entry(
+                        source_entry,
+                        thread_id=f"user:{user.id}:{source_entry.thread_id}",
+                    )
                 )
-            else:
+                replace_chat_message_for_user(
+                    user_id=user.id,
+                    source_record_id=source_entry.id,
+                    role="assistant",
+                    content=render_reflection_text(reflection.findings, reflection.summary),
+                )
+            except Exception:
+                logger.exception("Assistant reply refresh failed for entry %s", source_entry.id)
                 refresh_status = "refreshed"
                 refresh_message = (
                     "Memory refreshed. Neo4j and Weaviate were updated, but the saved assistant reply could not be refreshed."

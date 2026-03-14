@@ -311,7 +311,61 @@ def test_clarification_resolution_reprojects_all_entries_with_same_raw_alias(mon
     assert third_entry["id"] not in reprojected_entry_ids
 
 
-def test_clarification_resolution_falls_back_to_rewriting_saved_assistant_reply(monkeypatch) -> None:
+def test_clarification_resolution_reprojects_entries_found_via_stale_graph_alias(monkeypatch) -> None:
+    reprojected_entry_ids: list[str] = []
+
+    class FakeGraphProjector:
+        def list_source_record_ids_for_entity(self, *, user_id: str, entity_type: str, canonical_name: str) -> list[str]:
+            assert user_id == first_entry["user_id"]
+            assert entity_type == "person"
+            assert canonical_name == "tofian"
+            return [second_entry["id"]]
+
+    def record_reproject(entry, jobs) -> None:
+        reprojected_entry_ids.append(entry.id)
+
+    monkeypatch.setattr("app.main.GraphProjector", FakeGraphProjector)
+    monkeypatch.setattr("app.main.reproject_entry_artifacts", record_reproject)
+    access_token = register_user("clarification-graph-sweep@example.com")
+
+    first_response = client.post(
+        "/v1/journal-entries",
+        json={"journal_entry": "tofian and I talked after lunch", "goals": []},
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert first_response.status_code == 200
+    first_entry = first_response.json()["entry"]
+
+    second_response = client.post(
+        "/v1/journal-entries",
+        json={"journal_entry": "We had a tense meeting after the launch", "goals": []},
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert second_response.status_code == 200
+    second_entry = second_response.json()["entry"]
+
+    task = create_clarification_task_for_user(
+        user_id=first_entry["user_id"],
+        source_record_id=first_entry["id"],
+        entity_type="person",
+        raw_name="tofian",
+        candidate_canonical_name="torian",
+        prompt="Does 'tofian' refer to 'Torian' in this entry, or should it stay separate?",
+        options=["confirm_merge", "keep_separate", "dismiss"],
+        confidence=0.83,
+        evidence="'tofian' looks similar to existing person 'torian' and needs confirmation.",
+    )
+
+    resolve_response = client.post(
+        f"/v1/clarifications/{task.id}/resolve",
+        json={"resolution": "confirm_merge"},
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert resolve_response.status_code == 200
+    assert set(reprojected_entry_ids) == {first_entry["id"], second_entry["id"]}
+
+
+def test_clarification_resolution_rewrites_saved_assistant_reply_before_rerunning_workflow(monkeypatch) -> None:
     monkeypatch.setattr("app.main.reproject_entry_artifacts", lambda entry, jobs: None)
     monkeypatch.setattr(
         "app.main.run_reflection_workflow",
@@ -362,7 +416,9 @@ def test_clarification_resolution_falls_back_to_rewriting_saved_assistant_reply(
         headers={"Authorization": f"Bearer {access_token}"},
     )
     assert resolve_response.status_code == 200
-    assert "fallback rewrite" in resolve_response.json()["refresh_message"].lower()
+    assert resolve_response.json()["refresh_message"] == (
+        "Memory refreshed. Neo4j, Weaviate, and the stored assistant reply were updated."
+    )
 
     thread_detail_response = client.get(
         f"/v1/chat/threads/{entry['thread_id']}",

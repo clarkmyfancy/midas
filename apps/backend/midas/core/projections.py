@@ -1329,6 +1329,36 @@ class GraphProjector:
         rows = result.get("results", [{}])[0].get("data", [])
         return [dict(zip(("canonical_name", "display_name", "aliases", "max_confidence", "observation_count"), row.get("row", []), strict=False)) for row in rows]
 
+    def list_source_record_ids_for_entity(
+        self,
+        *,
+        user_id: str,
+        entity_type: str,
+        canonical_name: str,
+    ) -> list[str]:
+        try:
+            result = self._query(
+                """
+                MATCH (o:Observation {user_id: $user_id})-[:OBSERVED]->(e:Entity {user_id: $user_id, entity_type: $entity_type, canonical_name: $canonical_name})
+                RETURN DISTINCT o.source_record_id AS source_record_id
+                ORDER BY source_record_id
+                """,
+                {
+                    "user_id": user_id,
+                    "entity_type": entity_type,
+                    "canonical_name": canonical_name,
+                },
+            )
+        except RuntimeError:
+            return []
+        rows = result.get("results", [{}])[0].get("data", [])
+        source_record_ids: list[str] = []
+        for row in rows:
+            values = row.get("row", [])
+            if values and values[0]:
+                source_record_ids.append(str(values[0]))
+        return source_record_ids
+
     def _prepare_entity_for_storage(
         self,
         entry: JournalEntryRecord,
