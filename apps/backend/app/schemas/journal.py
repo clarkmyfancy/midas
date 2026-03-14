@@ -149,6 +149,11 @@ class JournalDeleteResponse(BaseModel):
     cleanup: list[DerivedStoreCleanupResponse]
 
 
+class UserDataDeleteResponse(BaseModel):
+    user_id: str
+    cleanup: list[DerivedStoreCleanupResponse]
+
+
 class MemoryDebugResponse(BaseModel):
     entry: JournalEntryResponse
     projection_jobs: list[ProjectionJobResponse]

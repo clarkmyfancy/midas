@@ -2,6 +2,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from midas.core.loader import load_capabilities
+from midas.core.projections import GraphUserCleanupResult, WeaviateCleanupResult
 
 
 client = TestClient(app)
@@ -50,6 +51,82 @@ def test_auth_me_returns_current_user() -> None:
 
     assert response.status_code == 200
     assert response.json()["email"] == "user@example.com"
+
+
+def test_auth_delete_data_clears_account_data_but_keeps_account(monkeypatch) -> None:
+    owner_token = register_and_login()
+    viewer_token = client.post(
+        "/v1/auth/register",
+        json={"email": "second@example.com", "password": "supersecret"},
+    ).json()["access_token"]
+
+    owner_first_entry = client.post(
+        "/v1/journal-entries",
+        json={"journal_entry": "Owner entry one.", "goals": []},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    ).json()["entry"]["id"]
+    owner_second_entry = client.post(
+        "/v1/journal-entries",
+        json={"journal_entry": "Owner entry two.", "goals": []},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    ).json()["entry"]["id"]
+    client.post(
+        "/v1/journal-entries",
+        json={"journal_entry": "Viewer entry.", "goals": []},
+        headers={"Authorization": f"Bearer {viewer_token}"},
+    )
+
+    monkeypatch.setattr(
+        "app.main.WeaviateProjector.delete_objects",
+        lambda self, object_ids: WeaviateCleanupResult(deleted_object_ids=list(object_ids)),
+    )
+    monkeypatch.setattr(
+        "app.main.GraphProjector.delete_user_data",
+        lambda self, user_id: GraphUserCleanupResult(
+            deleted_observations=2,
+            deleted_entities=5,
+            deleted_relationships=7,
+        ),
+    )
+
+    delete_response = client.delete(
+        "/v1/auth/data",
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    owner_entries_response = client.get(
+        "/v1/journal-entries",
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    owner_me_response = client.get(
+        "/v1/auth/me",
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    viewer_entries_response = client.get(
+        "/v1/journal-entries",
+        headers={"Authorization": f"Bearer {viewer_token}"},
+    )
+
+    assert delete_response.status_code == 200
+    payload = delete_response.json()
+    cleanup_by_store = {item["store"]: item for item in payload["cleanup"]}
+    assert cleanup_by_store["postgres"]["success"] is True
+    assert cleanup_by_store["postgres"]["details"] == {
+        "deleted_alias_resolution_count": 0,
+        "deleted_clarification_task_count": 0,
+        "deleted_entry_count": 2,
+        "deleted_projection_job_count": 6,
+    }
+    assert cleanup_by_store["postgres"]["deleted_ids"] == [owner_second_entry, owner_first_entry]
+    assert cleanup_by_store["weaviate"]["deleted_count"] == 6
+    assert cleanup_by_store["neo4j"]["details"] == {
+        "deleted_entity_count": 5,
+        "deleted_observation_count": 2,
+        "deleted_relationship_count": 7,
+    }
+    assert owner_entries_response.json()["entries"] == []
+    assert owner_me_response.status_code == 200
+    assert owner_me_response.json()["email"] == "user@example.com"
+    assert [entry["journal_entry"] for entry in viewer_entries_response.json()["entries"]] == ["Viewer entry."]
 
 
 def test_reflection_endpoint() -> None:

@@ -91,6 +91,58 @@ def test_memory_store_delete_removes_entry_and_projection_jobs() -> None:
     assert store.list_projection_jobs("user-1", source_record_id=entry.id) == []
 
 
+def test_memory_store_delete_user_data_removes_only_current_users_records() -> None:
+    store = MemoryMemoryStore()
+    owner_entry, owner_jobs = store.create_journal_entry(
+        user_id="user-1",
+        journal_entry="Owner entry",
+        goals=["Exercise"],
+        thread_id=None,
+        steps=None,
+        sleep_hours=None,
+        hrv_ms=None,
+        source="manual",
+    )
+    other_entry, _ = store.create_journal_entry(
+        user_id="user-2",
+        journal_entry="Other entry",
+        goals=[],
+        thread_id=None,
+        steps=None,
+        sleep_hours=None,
+        hrv_ms=None,
+        source="manual",
+    )
+    task = store.create_clarification_task(
+        user_id="user-1",
+        source_record_id=owner_entry.id,
+        entity_type="person",
+        raw_name="Josh",
+        candidate_canonical_name="joshua",
+        prompt="Does Josh refer to Joshua?",
+        options=["confirm_merge", "keep_separate", "dismiss"],
+        confidence=0.63,
+        evidence="Alias normalization inferred a merge.",
+    )
+    store.resolve_clarification_task(
+        user_id="user-1",
+        task_id=task.id,
+        resolution="confirm_merge",
+    )
+
+    deleted = store.delete_user_data("user-1")
+
+    assert deleted.deleted_entry_ids == [owner_entry.id]
+    assert {job_id for job_id in deleted.deleted_projection_job_ids} == {job.id for job in owner_jobs}
+    assert deleted.deleted_clarification_task_ids == [task.id]
+    assert deleted.deleted_alias_resolution_count == 1
+    assert store.list_journal_entries("user-1") == []
+    assert store.list_projection_jobs("user-1") == []
+    assert store.list_clarification_tasks("user-1") == []
+    assert store.get_alias_resolution(user_id="user-1", entity_type="person", raw_name="Josh") is None
+    assert [entry.id for entry in store.list_journal_entries("user-2")] == [other_entry.id]
+
+
 def test_heuristic_graph_extractor_merges_person_aliases_and_builds_relationships() -> None:
     entry, _ = MemoryMemoryStore().create_journal_entry(
         user_id="user-1",

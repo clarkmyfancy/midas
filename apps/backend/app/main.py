@@ -36,6 +36,7 @@ from app.schemas.journal import (
     JournalEntryListResponse,
     JournalEntryResponse,
     JournalIngestResponse,
+    UserDataDeleteResponse,
     MemorySettingsResponse,
     MemoryDebugResponse,
     ProjectionJobListResponse,
@@ -60,6 +61,7 @@ from midas.core.loader import load_capabilities
 from midas.core.memory import (
     create_journal_entry_for_user,
     delete_journal_entry_for_user,
+    delete_user_data_for_user,
     list_clarification_tasks_for_user,
     get_journal_entry_for_user,
     init_memory_storage,
@@ -559,6 +561,81 @@ def auth_login(payload: AuthLoginRequest) -> AuthTokenResponse:
 @app.get("/v1/auth/me", response_model=AuthUserResponse)
 def auth_me(user: Annotated[AuthUser, Depends(get_current_user)]) -> AuthUserResponse:
     return AuthUserResponse(id=user.id, email=user.email, is_pro=user.is_pro)
+
+
+@app.delete("/api/v1/auth/data", response_model=UserDataDeleteResponse)
+@app.delete("/v1/auth/data", response_model=UserDataDeleteResponse)
+def auth_delete_user_data(
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> UserDataDeleteResponse:
+    deleted = delete_user_data_for_user(user.id)
+    cleanup = [
+        DerivedStoreCleanupResponse(
+            store="postgres",
+            success=True,
+            deleted_count=(
+                len(deleted.deleted_entry_ids)
+                + len(deleted.deleted_projection_job_ids)
+                + len(deleted.deleted_clarification_task_ids)
+                + deleted.deleted_alias_resolution_count
+            ),
+            deleted_ids=deleted.deleted_entry_ids,
+            details={
+                "deleted_entry_count": len(deleted.deleted_entry_ids),
+                "deleted_projection_job_count": len(deleted.deleted_projection_job_ids),
+                "deleted_clarification_task_count": len(deleted.deleted_clarification_task_ids),
+                "deleted_alias_resolution_count": deleted.deleted_alias_resolution_count,
+            },
+        )
+    ]
+
+    try:
+        weaviate_result = WeaviateProjector().delete_objects(deleted.deleted_projection_job_ids)
+    except Exception as exc:
+        cleanup.append(
+            DerivedStoreCleanupResponse(
+                store="weaviate",
+                success=False,
+                deleted_count=0,
+                error=str(exc),
+            )
+        )
+    else:
+        cleanup.append(
+            DerivedStoreCleanupResponse(
+                store="weaviate",
+                success=True,
+                deleted_count=len(weaviate_result.deleted_object_ids),
+                deleted_ids=weaviate_result.deleted_object_ids,
+            )
+        )
+
+    try:
+        graph_result = GraphProjector().delete_user_data(user.id)
+    except Exception as exc:
+        cleanup.append(
+            DerivedStoreCleanupResponse(
+                store="neo4j",
+                success=False,
+                deleted_count=0,
+                error=str(exc),
+            )
+        )
+    else:
+        cleanup.append(
+            DerivedStoreCleanupResponse(
+                store="neo4j",
+                success=True,
+                deleted_count=graph_result.deleted_observations + graph_result.deleted_entities,
+                details={
+                    "deleted_observation_count": graph_result.deleted_observations,
+                    "deleted_entity_count": graph_result.deleted_entities,
+                    "deleted_relationship_count": graph_result.deleted_relationships,
+                },
+            )
+        )
+
+    return UserDataDeleteResponse(user_id=user.id, cleanup=cleanup)
 
 
 @app.get("/v1/capabilities", response_model=CapabilityMapResponse)

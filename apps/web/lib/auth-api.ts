@@ -3,6 +3,7 @@ import type {
   AuthRegisterRequest,
   AuthTokenResponse,
   AuthUserResponse,
+  UserDataDeleteResponse,
 } from "@midas/types";
 
 import { requestJson } from "./api";
@@ -48,6 +49,17 @@ export function getCurrentUser(accessToken: string, fetcher: typeof fetch = fetc
     {
       headers: { Authorization: `Bearer ${accessToken}` },
       method: "GET",
+    },
+    fetcher,
+  );
+}
+
+export function deleteAccountData(accessToken: string, fetcher: typeof fetch = fetch) {
+  return requestJson<UserDataDeleteResponse>(
+    "/api/v1/auth/data",
+    {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      method: "DELETE",
     },
     fetcher,
   );

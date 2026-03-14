@@ -184,6 +184,11 @@ export interface ReviewStatResponse {
   value: string;
 }
 
+export interface UserDataDeleteResponse {
+  user_id: string;
+  cleanup: DerivedStoreCleanupResponse[];
+}
+
 export interface WeaviateArtifactResponse {
   projection_job_id: string;
   object_id: string;

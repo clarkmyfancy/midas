@@ -83,6 +83,14 @@ class AliasResolutionRecord:
     updated_at: datetime
 
 
+@dataclass(frozen=True)
+class UserDataDeleteResult:
+    deleted_entry_ids: list[str]
+    deleted_projection_job_ids: list[str]
+    deleted_clarification_task_ids: list[str]
+    deleted_alias_resolution_count: int
+
+
 class MemoryStore:
     def setup(self) -> None:
         raise NotImplementedError
@@ -112,6 +120,9 @@ class MemoryStore:
         user_id: str,
         entry_id: str,
     ) -> tuple[JournalEntryRecord, list[ProjectionJobRecord]] | None:
+        raise NotImplementedError
+
+    def delete_user_data(self, user_id: str) -> UserDataDeleteResult:
         raise NotImplementedError
 
     def list_projection_jobs(
@@ -290,6 +301,59 @@ class MemoryMemoryStore(MemoryStore):
             ]
 
         return entry, jobs
+
+    def delete_user_data(self, user_id: str) -> UserDataDeleteResult:
+        with self._lock:
+            entry_ids = [
+                entry.id
+                for entry in sorted(
+                    [self._entries_by_id[entry_id] for entry_id in self._entry_ids_by_user.get(user_id, [])],
+                    key=lambda item: item.created_at,
+                    reverse=True,
+                )
+            ]
+            job_ids = [
+                job.id
+                for job in sorted(
+                    [self._jobs_by_id[job_id] for job_id in self._job_ids_by_user.get(user_id, [])],
+                    key=lambda item: item.created_at,
+                    reverse=True,
+                )
+            ]
+            clarification_task_ids = [
+                task.id
+                for task in sorted(
+                    [
+                        self._clarification_tasks_by_id[task_id]
+                        for task_id in self._clarification_task_ids_by_user.get(user_id, [])
+                    ],
+                    key=lambda item: item.created_at,
+                    reverse=True,
+                )
+            ]
+            alias_resolution_keys = [
+                key for key in self._alias_resolution_by_key if key[0] == user_id
+            ]
+
+            for entry_id in entry_ids:
+                self._entries_by_id.pop(entry_id, None)
+            for job_id in job_ids:
+                self._jobs_by_id.pop(job_id, None)
+            for task_id in clarification_task_ids:
+                self._clarification_tasks_by_id.pop(task_id, None)
+            for key in alias_resolution_keys:
+                self._alias_resolution_by_key.pop(key, None)
+
+            self._entry_ids_by_user.pop(user_id, None)
+            self._job_ids_by_user.pop(user_id, None)
+            self._clarification_task_ids_by_user.pop(user_id, None)
+
+        return UserDataDeleteResult(
+            deleted_entry_ids=entry_ids,
+            deleted_projection_job_ids=job_ids,
+            deleted_clarification_task_ids=clarification_task_ids,
+            deleted_alias_resolution_count=len(alias_resolution_keys),
+        )
 
     def list_projection_jobs(
         self,
@@ -766,6 +830,88 @@ class PostgresMemoryStore(MemoryStore):
 
         return self._build_entry(entry_row), [self._build_job(row) for row in job_rows]
 
+    def delete_user_data(self, user_id: str) -> UserDataDeleteResult:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id
+                FROM journal_entries
+                WHERE user_id = %s
+                ORDER BY created_at DESC
+                """,
+                (user_id,),
+            )
+            entry_ids = [row[0] for row in cur.fetchall()]
+
+            cur.execute(
+                """
+                SELECT id
+                FROM memory_projection_jobs
+                WHERE user_id = %s
+                ORDER BY created_at DESC
+                """,
+                (user_id,),
+            )
+            job_ids = [row[0] for row in cur.fetchall()]
+
+            cur.execute(
+                """
+                SELECT id
+                FROM clarification_tasks
+                WHERE user_id = %s
+                ORDER BY created_at DESC
+                """,
+                (user_id,),
+            )
+            clarification_task_ids = [row[0] for row in cur.fetchall()]
+
+            cur.execute(
+                """
+                SELECT COUNT(*)
+                FROM alias_resolutions
+                WHERE user_id = %s
+                """,
+                (user_id,),
+            )
+            deleted_alias_resolution_count = int(cur.fetchone()[0])
+
+            cur.execute(
+                """
+                DELETE FROM alias_resolutions
+                WHERE user_id = %s
+                """,
+                (user_id,),
+            )
+            cur.execute(
+                """
+                DELETE FROM clarification_tasks
+                WHERE user_id = %s
+                """,
+                (user_id,),
+            )
+            cur.execute(
+                """
+                DELETE FROM memory_projection_jobs
+                WHERE user_id = %s
+                """,
+                (user_id,),
+            )
+            cur.execute(
+                """
+                DELETE FROM journal_entries
+                WHERE user_id = %s
+                """,
+                (user_id,),
+            )
+            conn.commit()
+
+        return UserDataDeleteResult(
+            deleted_entry_ids=entry_ids,
+            deleted_projection_job_ids=job_ids,
+            deleted_clarification_task_ids=clarification_task_ids,
+            deleted_alias_resolution_count=deleted_alias_resolution_count,
+        )
+
     def list_projection_jobs(
         self,
         user_id: str,
@@ -1169,6 +1315,10 @@ def delete_journal_entry_for_user(
     entry_id: str,
 ) -> tuple[JournalEntryRecord, list[ProjectionJobRecord]] | None:
     return get_memory_store().delete_journal_entry(user_id, entry_id)
+
+
+def delete_user_data_for_user(user_id: str) -> UserDataDeleteResult:
+    return get_memory_store().delete_user_data(user_id)
 
 
 def list_projection_jobs_for_user(

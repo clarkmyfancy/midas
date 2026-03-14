@@ -103,6 +103,13 @@ class GraphCleanupResult:
     deleted_entities: int
 
 
+@dataclass(frozen=True)
+class GraphUserCleanupResult:
+    deleted_observations: int
+    deleted_entities: int
+    deleted_relationships: int
+
+
 def normalize_name(value: str) -> str:
     normalized = re.sub(r"[^a-z0-9]+", "_", value.strip().lower()).strip("_")
     return normalized or "unknown"
@@ -1138,6 +1145,36 @@ class GraphProjector:
             deleted_observation_ids=[str(item) for item in observation_ids],
             deleted_relationships=deleted_relationships,
             deleted_entities=deleted_entities,
+        )
+
+    def delete_user_data(self, user_id: str) -> GraphUserCleanupResult:
+        result = self._query(
+            """
+            OPTIONAL MATCH (n {user_id: $user_id})
+            OPTIONAL MATCH (n)-[r]-()
+            WITH [node IN collect(DISTINCT n) WHERE node IS NOT NULL] AS nodes,
+                 [relationship IN collect(DISTINCT r) WHERE relationship IS NOT NULL] AS relationships
+            WITH nodes,
+                 size([node IN nodes WHERE 'Observation' IN labels(node)]) AS deleted_observations,
+                 size([node IN nodes WHERE 'Entity' IN labels(node)]) AS deleted_entities,
+                 size(relationships) AS deleted_relationships
+            FOREACH (node IN nodes | DETACH DELETE node)
+            RETURN deleted_observations, deleted_entities, deleted_relationships
+            """,
+            {"user_id": user_id},
+        )
+        rows = result.get("results", [{}])[0].get("data", [])
+        if not rows:
+            return GraphUserCleanupResult(
+                deleted_observations=0,
+                deleted_entities=0,
+                deleted_relationships=0,
+            )
+        deleted_observations, deleted_entities, deleted_relationships = rows[0].get("row", [0, 0, 0])
+        return GraphUserCleanupResult(
+            deleted_observations=int(deleted_observations),
+            deleted_entities=int(deleted_entities),
+            deleted_relationships=int(deleted_relationships),
         )
 
     def fetch_observation(self, source_record_id: str, user_id: str) -> dict[str, Any]:
