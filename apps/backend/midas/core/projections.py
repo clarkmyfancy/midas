@@ -1196,6 +1196,47 @@ def normalize_extraction(entry: JournalEntryRecord, extraction: GraphExtraction)
         if current is None or normalized_relationship.confidence > current.confidence:
             normalized_relationships[relationship_key] = normalized_relationship
 
+    project_name_map: dict[str, str] = {}
+    for entity in normalized_entities.values():
+        if entity.entity_type != "project":
+            continue
+        project_name_map[entity.canonical_name] = entity.canonical_name
+        project_name_map[normalize_name(entity.name)] = entity.canonical_name
+        for alias in entity.aliases:
+            project_name_map[normalize_name(alias)] = entity.canonical_name
+
+    def extract_project_alias_targets(pattern: str) -> list[str]:
+        return [
+            project_name_map.get(normalize_name(match), normalize_name(match))
+            for match in re.findall(pattern, entry.journal_entry.lower())
+            if project_name_map.get(normalize_name(match), normalize_name(match)) in known_canonical_names
+        ]
+
+    current_projects = extract_project_alias_targets(
+        r"(?:this|current) project['\"]?\s+(?:is|was|refers?\s+to|means|i'?m\s+referring\s+to|referring\s+to)\s+([a-z0-9][a-z0-9-]{1,30})"
+    )
+    previous_projects = extract_project_alias_targets(
+        r"(?:last|previous|prior) project['\"]?\s+(?:is|was|refers?\s+to|means|i'?m\s+referring\s+to|referring\s+to)\s+([a-z0-9][a-z0-9-]{1,30})"
+    )
+    if current_projects and previous_projects:
+        for previous_project in previous_projects:
+            for current_project in current_projects:
+                if previous_project == current_project:
+                    continue
+                for relationship_key in (
+                    (previous_project, current_project, "precedes"),
+                    (current_project, previous_project, "precedes"),
+                ):
+                    normalized_relationships.pop(relationship_key, None)
+                relationship_key = (previous_project, current_project, "precedes")
+                normalized_relationships[relationship_key] = ExtractedRelationship(
+                    source_canonical_name=previous_project,
+                    target_canonical_name=current_project,
+                    relationship_type="precedes",
+                    confidence=0.97,
+                    evidence="Explicit project chronology: 'last/previous project' occurs before 'this/current project'.",
+                )
+
     normalized_summary = normalize_free_text(extraction.summary) if extraction.summary.strip() else build_episode_summary(entry)
     return GraphExtraction(
         summary=normalized_summary,

@@ -317,6 +317,27 @@ def build_reflection_request_for_entry(entry: JournalEntryResponse | object, *, 
     )
 
 
+def find_entries_affected_by_clarification(user_id: str, task) -> list[object]:
+    entries_by_id = {
+        entry.id: entry
+        for entry in list_journal_entries_for_user(user_id)
+    }
+    source_entry = entries_by_id.get(task.source_record_id)
+    if task.resolution == "dismiss":
+        return [source_entry] if source_entry is not None else []
+
+    pattern = re.compile(rf"(?<!\\w){re.escape(task.raw_name.strip().lower())}(?!\\w)")
+    affected_entries = [
+        entry
+        for entry in entries_by_id.values()
+        if pattern.search(entry.journal_entry.lower())
+    ]
+    if source_entry is not None and source_entry not in affected_entries:
+        affected_entries.append(source_entry)
+    affected_entries.sort(key=lambda entry: entry.created_at)
+    return affected_entries
+
+
 async def stream_reflection_events(
     payload: ReflectionRequest,
     *,
@@ -442,44 +463,55 @@ def resolve_clarification(
 
     refresh_status = "not_needed"
     refresh_message: str | None = None
-    entry = get_journal_entry_for_user(user.id, task.source_record_id)
-    if entry is not None:
-        jobs = list_projection_jobs_for_user(user.id, source_record_id=task.source_record_id)
+    affected_entries = find_entries_affected_by_clarification(user.id, task)
+    refreshed_entry_count = 0
+    for entry in affected_entries:
+        jobs = list_projection_jobs_for_user(user.id, source_record_id=entry.id)
         try:
             reproject_entry_artifacts(entry, jobs)
-            refresh_status = "refreshed"
-            refresh_message = "Memory refreshed. Neo4j and Weaviate were updated for this entry."
+            refreshed_entry_count += 1
         except Exception as exc:
             logger.exception("Clarification refresh failed for entry %s", entry.id)
-            requeue_projection_jobs_for_user(
-                user_id=user.id,
-                source_record_id=task.source_record_id,
-                message=f"Clarification refresh queued after failure: {exc}",
-            )
+            for queued_entry in affected_entries:
+                requeue_projection_jobs_for_user(
+                    user_id=user.id,
+                    source_record_id=queued_entry.id,
+                    message=f"Clarification refresh queued after failure: {exc}",
+                )
             refresh_status = "queued"
             refresh_message = (
                 "Clarification saved. Memory refresh was queued and will retry when the server comes back online."
             )
-        if entry.thread_id and refresh_status == "refreshed":
-            try:
-                reflection = run_reflection_workflow(
-                    build_reflection_request_for_entry(
-                        entry,
-                        thread_id=f"user:{user.id}:{entry.thread_id}",
-                    )
+            break
+    else:
+        if refreshed_entry_count:
+            entry_label = "entry" if refreshed_entry_count == 1 else "entries"
+            refresh_status = "refreshed"
+            refresh_message = (
+                f"Memory refreshed. Neo4j and Weaviate were updated for {refreshed_entry_count} {entry_label}."
+            )
+
+    source_entry = get_journal_entry_for_user(user.id, task.source_record_id)
+    if source_entry and source_entry.thread_id and refresh_status == "refreshed":
+        try:
+            reflection = run_reflection_workflow(
+                build_reflection_request_for_entry(
+                    source_entry,
+                    thread_id=f"user:{user.id}:{source_entry.thread_id}",
                 )
-                replace_chat_message_for_user(
-                    user_id=user.id,
-                    source_record_id=entry.id,
-                    role="assistant",
-                    content=render_reflection_text(reflection.findings, reflection.summary),
-                )
-            except Exception:
-                logger.exception("Assistant reply refresh failed for entry %s", entry.id)
-                refresh_status = "refreshed"
-                refresh_message = (
-                    "Memory refreshed. Neo4j and Weaviate were updated, but the saved assistant reply could not be refreshed."
-                )
+            )
+            replace_chat_message_for_user(
+                user_id=user.id,
+                source_record_id=source_entry.id,
+                role="assistant",
+                content=render_reflection_text(reflection.findings, reflection.summary),
+            )
+        except Exception:
+            logger.exception("Assistant reply refresh failed for entry %s", source_entry.id)
+            refresh_status = "refreshed"
+            refresh_message = (
+                "Memory refreshed. Neo4j and Weaviate were updated, but the saved assistant reply could not be refreshed."
+            )
     return serialize_clarification_task(
         task,
         refresh_status=refresh_status,

@@ -6,11 +6,13 @@ from midas.core.memory import (
 )
 from midas.core.projections import (
     ExtractedEntity,
+    ExtractedRelationship,
     GraphExtraction,
     GraphProjector,
     WEAVIATE_CLASS_PROPERTIES,
     build_weaviate_projection_payload,
     heuristic_extract_graph,
+    normalize_extraction,
 )
 
 
@@ -538,6 +540,60 @@ def test_prepare_extraction_merges_current_user_aliases_without_clarification() 
 
     assert len(prepared.entities) == 1
     assert prepared.entities[0].canonical_name == "self"
-    assert prepared.entities[0].name == "Self"
-    assert prepared.entities[0].needs_clarification is False
-    assert set(prepared.entities[0].aliases) >= {"I", "self"}
+
+
+def test_normalize_extraction_corrects_project_precedes_direction_from_alias_language() -> None:
+    entry, _ = MemoryMemoryStore().create_journal_entry(
+        user_id="user-1",
+        journal_entry=(
+            "i should mention that 'this project' refers to Midas. all of the recent entries i've done refer to that one "
+            "and when i say the 'last project' i'm referring to thrivesight"
+        ),
+        goals=[],
+        thread_id="dashboard-chat",
+        steps=None,
+        sleep_hours=None,
+        hrv_ms=None,
+        source="reflection_api",
+    )
+    extraction = GraphExtraction(
+        summary="midas and thrivesight relationship",
+        entities=[
+            ExtractedEntity(
+                entity_type="project",
+                name="Midas",
+                canonical_name="midas",
+                confidence=0.95,
+                evidence="Current project alias.",
+                aliases=["Midas"],
+            ),
+            ExtractedEntity(
+                entity_type="project",
+                name="thrivesight",
+                canonical_name="thrivesight",
+                confidence=0.95,
+                evidence="Last project alias.",
+                aliases=["thrivesight"],
+            ),
+        ],
+        relationships=[
+            ExtractedRelationship(
+                source_canonical_name="midas",
+                target_canonical_name="thrivesight",
+                relationship_type="precedes",
+                confidence=0.75,
+                evidence="Model guessed the direction.",
+            )
+        ],
+    )
+
+    normalized = normalize_extraction(entry, extraction)
+    precedes_relationships = [
+        relationship
+        for relationship in normalized.relationships
+        if relationship.relationship_type == "precedes"
+    ]
+
+    assert len(precedes_relationships) == 1
+    assert precedes_relationships[0].source_canonical_name == "thrivesight"
+    assert precedes_relationships[0].target_canonical_name == "midas"

@@ -249,3 +249,59 @@ def test_clarification_resolution_queues_retry_when_refresh_fails(monkeypatch) -
     assert jobs_response.status_code == 200
     assert {job["status"] for job in jobs_response.json()["projection_jobs"]} == {"pending"}
     assert all(job["last_error"] and "queued after failure" in job["last_error"] for job in jobs_response.json()["projection_jobs"])
+
+
+def test_clarification_resolution_reprojects_all_entries_with_same_raw_alias(monkeypatch) -> None:
+    reprojected_entry_ids: list[str] = []
+
+    def record_reproject(entry, jobs) -> None:
+        reprojected_entry_ids.append(entry.id)
+
+    monkeypatch.setattr("app.main.reproject_entry_artifacts", record_reproject)
+    access_token = register_user("clarification-sweep@example.com")
+
+    first_response = client.post(
+        "/v1/journal-entries",
+        json={"journal_entry": "tofian and I talked after lunch", "goals": []},
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert first_response.status_code == 200
+    first_entry = first_response.json()["entry"]
+
+    second_response = client.post(
+        "/v1/journal-entries",
+        json={"journal_entry": "I ran into tofian again before heading home", "goals": []},
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert second_response.status_code == 200
+    second_entry = second_response.json()["entry"]
+
+    third_response = client.post(
+        "/v1/journal-entries",
+        json={"journal_entry": "torian joined the planning session", "goals": []},
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert third_response.status_code == 200
+    third_entry = third_response.json()["entry"]
+
+    task = create_clarification_task_for_user(
+        user_id=first_entry["user_id"],
+        source_record_id=first_entry["id"],
+        entity_type="person",
+        raw_name="tofian",
+        candidate_canonical_name="torian",
+        prompt="Does 'tofian' refer to 'Torian' in this entry, or should it stay separate?",
+        options=["confirm_merge", "keep_separate", "dismiss"],
+        confidence=0.83,
+        evidence="'tofian' looks similar to existing person 'torian' and needs confirmation.",
+    )
+
+    resolve_response = client.post(
+        f"/v1/clarifications/{task.id}/resolve",
+        json={"resolution": "confirm_merge"},
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert resolve_response.status_code == 200
+    assert resolve_response.json()["refresh_status"] == "refreshed"
+    assert set(reprojected_entry_ids) == {first_entry["id"], second_entry["id"]}
+    assert third_entry["id"] not in reprojected_entry_ids
