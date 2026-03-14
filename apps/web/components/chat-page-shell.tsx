@@ -38,6 +38,17 @@ function formatHistoryTimestamp(value: string) {
 }
 
 
+function ThinkingDots() {
+  return (
+    <span aria-label="Midas is thinking" className="reflect-thinking" role="status">
+      <span className="reflect-thinking-dot">.</span>
+      <span className="reflect-thinking-dot">.</span>
+      <span className="reflect-thinking-dot">.</span>
+    </span>
+  );
+}
+
+
 export function ChatPageShell() {
   const router = useRouter();
   const aiPaneRef = useRef<HTMLDivElement | null>(null);
@@ -384,12 +395,6 @@ export function ChatPageShell() {
 
         <section className="reflect-shell">
           <div className="reflect-ai-pane" ref={aiPaneRef}>
-            <div className="reflect-status-row">
-              <span className={`status-pill ${isStreaming ? "status-pill-live" : ""}`}>
-                {isStreaming ? "Listening..." : isThreadLoading ? "Loading thread..." : "Ready"}
-              </span>
-            </div>
-
             {!messages.length && !isThreadLoading ? (
               <article className="reflect-message reflect-message-assistant">
                 <div className="reflect-message-meta">
@@ -416,7 +421,7 @@ export function ChatPageShell() {
                   <span>{message.role === "user" ? "You" : "Midas"}</span>
                 </div>
                 <div className="reflect-message-body">
-                  {message.content || "Waiting for the first token..."}
+                  {message.content ? <>{message.content}</> : message.streaming ? <ThinkingDots /> : null}
                 </div>
               </article>
             ))}

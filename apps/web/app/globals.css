@@ -752,7 +752,9 @@ h2 {
 }
 
 .reflect-page {
+  display: flex;
   flex: 1;
+  min-height: 0;
   min-height: 0;
   overflow: hidden;
 }
@@ -761,6 +763,7 @@ h2 {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   gap: 18px;
+  flex: 1;
   min-height: 0;
   height: 100%;
 }
@@ -931,24 +934,23 @@ h2 {
   padding-right: 8px;
 }
 
-.reflect-status-row {
-  display: flex;
-  justify-content: flex-end;
-}
-
 .reflect-message {
-  max-width: min(62%, 980px);
+  display: grid;
+  gap: 10px;
+  width: min(78%, 1100px);
   border: 1px solid rgba(162, 169, 176, 0.72);
   border-radius: 20px;
-  padding: 16px 18px;
+  padding: 20px 22px;
 }
 
 .reflect-message-user {
+  justify-self: end;
   background: rgba(214, 226, 241, 0.97);
   border-color: rgba(135, 158, 184, 0.9);
 }
 
 .reflect-message-assistant {
+  justify-self: start;
   background: rgba(231, 234, 236, 0.96);
   border-color: rgba(175, 180, 184, 0.92);
 }
@@ -958,13 +960,13 @@ h2 {
 }
 
 .reflect-clarification-message {
-  max-width: min(72%, 980px);
+  width: min(86%, 1180px);
   border-color: rgba(211, 138, 99, 0.9);
   background: rgba(250, 239, 229, 0.98);
 }
 
 .reflect-message-meta {
-  margin-bottom: 8px;
+  margin-bottom: 2px;
   color: #667066;
   font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: 0.86rem;
@@ -974,11 +976,12 @@ h2 {
 }
 
 .reflect-message-body {
+  min-height: 1.6em;
   white-space: pre-wrap;
   color: #27312c;
   font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  font-size: 1rem;
-  line-height: 1.55;
+  font-size: 1.02rem;
+  line-height: 1.65;
 }
 
 .reflect-message-body p {
@@ -992,6 +995,43 @@ h2 {
 .reflect-clarification-evidence {
   color: #6b6259;
   font-size: 0.92rem;
+}
+
+.reflect-thinking {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 1.6em;
+}
+
+.reflect-thinking-dot {
+  color: rgba(39, 49, 44, 0.78);
+  font-size: 1.5rem;
+  font-weight: 700;
+  line-height: 1;
+  animation: reflect-thinking-pulse 1.1s infinite ease-in-out;
+}
+
+.reflect-thinking-dot:nth-child(2) {
+  animation-delay: 0.16s;
+}
+
+.reflect-thinking-dot:nth-child(3) {
+  animation-delay: 0.32s;
+}
+
+@keyframes reflect-thinking-pulse {
+  0%,
+  80%,
+  100% {
+    opacity: 0.24;
+    transform: translateY(0) scale(0.8);
+  }
+
+  40% {
+    opacity: 1;
+    transform: translateY(-2px) scale(1);
+  }
 }
 
 .reflect-composer {
