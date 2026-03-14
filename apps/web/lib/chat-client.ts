@@ -56,22 +56,16 @@ export async function streamSseTokens(
 
 type SendChatMessageParams = {
   accessToken: string;
-  hrvMs: number | null;
   journalEntry: string;
   onToken: (token: string) => void;
-  sleepHours: number | null;
-  steps: number | null;
   threadId: string;
 };
 
 export async function sendChatMessage(
   {
     accessToken,
-    hrvMs,
     journalEntry,
     onToken,
-    sleepHours,
-    steps,
     threadId,
   }: SendChatMessageParams,
   fetcher: typeof fetch = fetch,
@@ -79,10 +73,7 @@ export async function sendChatMessage(
   const response = await fetcher(resolveApiUrl("/api/v1/reflections"), {
     body: JSON.stringify({
       goals: [],
-      hrv_ms: hrvMs,
       journal_entry: journalEntry,
-      sleep_hours: sleepHours,
-      steps,
       thread_id: threadId,
     }),
     headers: {

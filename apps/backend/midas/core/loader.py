@@ -12,11 +12,15 @@ class CoreFallbackAgent(ReflectionCoachInterface):
 
     def run(self, state: Mapping[str, Any]) -> dict[str, Any]:
         findings = list(state.get("findings", []))
-        summary = (
-            "Midas Core detected the following themes: "
-            + "; ".join(findings)
-            + ". Upgrade to Pro for deeper weekly reflection analysis."
-        )
+        journal_entry = str(state.get("journal_entry", "")).strip()
+        if findings:
+            summary = "What stands out: " + " ".join(findings)
+        elif journal_entry:
+            summary = f"What stands out is the tension inside: {journal_entry}"
+        else:
+            summary = "What stands out is still unclear from this entry."
+
+        summary += " Stay with the part that feels most charged or unresolved."
         return {
             "summary": summary,
             "trace": [f"{self.name}: generated core fallback reflection summary"],
@@ -67,4 +71,3 @@ def load_capabilities(*, force: bool = False):
 
     _loaded = True
     return registry
-

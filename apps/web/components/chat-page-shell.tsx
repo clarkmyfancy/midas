@@ -1,10 +1,12 @@
 "use client";
 
+import type { ClarificationTaskResponse } from "@midas/types";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import { ApiError } from "../lib/api";
 import { sendChatMessage } from "../lib/chat-client";
+import { listClarifications, resolveClarification } from "../lib/review-api";
 import { useAuth } from "./auth-provider";
 
 type ChatRole = "assistant" | "user";
@@ -20,7 +22,7 @@ const WELCOME_MESSAGE: ChatMessage = {
   id: "welcome",
   role: "assistant",
   content:
-    "Start reflecting below. Your response will stream into this upper pane as Midas produces it.",
+    "Start reflecting below. If a name or reference looks ambiguous, Midas will ask you here before it merges it into memory.",
 };
 
 export function ChatPageShell() {
@@ -28,12 +30,11 @@ export function ChatPageShell() {
   const aiPaneRef = useRef<HTMLDivElement | null>(null);
   const { isReady, session, logout } = useAuth();
   const [messages, setMessages] = useState<ChatMessage[]>([WELCOME_MESSAGE]);
+  const [clarifications, setClarifications] = useState<ClarificationTaskResponse[]>([]);
   const [input, setInput] = useState("");
-  const [steps, setSteps] = useState("");
-  const [sleepHours, setSleepHours] = useState("");
-  const [hrvMs, setHrvMs] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [resolvingTaskId, setResolvingTaskId] = useState<string | null>(null);
 
   useEffect(() => {
     if (isReady && !session) {
@@ -45,7 +46,32 @@ export function ChatPageShell() {
     if (aiPaneRef.current) {
       aiPaneRef.current.scrollTop = aiPaneRef.current.scrollHeight;
     }
-  }, [messages]);
+  }, [clarifications, messages]);
+
+  async function loadClarifications() {
+    if (!session) {
+      return;
+    }
+
+    try {
+      const response = await listClarifications(session.accessToken);
+      setClarifications(response.tasks);
+    } catch (caughtError) {
+      if (caughtError instanceof ApiError && caughtError.status === 401) {
+        logout();
+        router.replace("/login");
+        return;
+      }
+      setError(caughtError instanceof Error ? caughtError.message : "Unable to load clarification prompts.");
+    }
+  }
+
+  useEffect(() => {
+    if (session) {
+      void loadClarifications();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -65,13 +91,12 @@ export function ChatPageShell() {
       content: trimmedMessage,
     };
     const assistantMessageId = `assistant-${Date.now()}`;
-    const nextMessages = [
-      ...messages,
-      userMessage,
-      { id: assistantMessageId, role: "assistant" as const, content: "", streaming: true },
-    ];
 
-    setMessages(nextMessages);
+    setMessages((currentMessages) => [
+      ...currentMessages,
+      userMessage,
+      { id: assistantMessageId, role: "assistant", content: "", streaming: true },
+    ]);
     setInput("");
     setError(null);
     setIsStreaming(true);
@@ -79,7 +104,6 @@ export function ChatPageShell() {
     try {
       await sendChatMessage({
         accessToken: session.accessToken,
-        hrvMs: hrvMs.trim() ? Number(hrvMs) : null,
         journalEntry: trimmedMessage,
         onToken(token) {
           setMessages((currentMessages) =>
@@ -93,11 +117,10 @@ export function ChatPageShell() {
             ),
           );
         },
-        sleepHours: sleepHours.trim() ? Number(sleepHours) : null,
-        steps: steps.trim() ? Number(steps) : null,
         threadId: "dashboard-chat",
       });
 
+      await loadClarifications();
       setMessages((currentMessages) =>
         currentMessages.map((message) =>
           message.id === assistantMessageId ? { ...message, streaming: false } : message,
@@ -132,6 +155,26 @@ export function ChatPageShell() {
     }
   }
 
+  async function handleResolveClarification(
+    taskId: string,
+    resolution: "confirm_merge" | "keep_separate" | "dismiss",
+  ) {
+    if (!session) {
+      return;
+    }
+
+    setResolvingTaskId(taskId);
+    setError(null);
+    try {
+      await resolveClarification(session.accessToken, taskId, { resolution });
+      await loadClarifications();
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "Unable to resolve clarification.");
+    } finally {
+      setResolvingTaskId(null);
+    }
+  }
+
   return (
     <main className="page reflect-page">
       <section className="reflect-shell">
@@ -161,6 +204,49 @@ export function ChatPageShell() {
               </div>
             </article>
           ))}
+
+          {clarifications.map((task) => (
+            <article
+              className="reflect-message reflect-message-assistant reflect-clarification-message"
+              key={task.id}
+            >
+              <div className="reflect-message-meta">
+                <span>Midas</span>
+              </div>
+              <div className="reflect-message-body">
+                <p>{task.prompt}</p>
+                <p className="reflect-clarification-evidence">
+                  Confidence {(task.confidence * 100).toFixed(0)}%. {task.evidence}
+                </p>
+              </div>
+              <div className="review-clarification-actions">
+                <button
+                  className="button button-primary"
+                  disabled={resolvingTaskId === task.id}
+                  onClick={() => void handleResolveClarification(task.id, "confirm_merge")}
+                  type="button"
+                >
+                  Yes, same
+                </button>
+                <button
+                  className="button button-secondary"
+                  disabled={resolvingTaskId === task.id}
+                  onClick={() => void handleResolveClarification(task.id, "keep_separate")}
+                  type="button"
+                >
+                  No, separate
+                </button>
+                <button
+                  className="ghost-button"
+                  disabled={resolvingTaskId === task.id}
+                  onClick={() => void handleResolveClarification(task.id, "dismiss")}
+                  type="button"
+                >
+                  Later
+                </button>
+              </div>
+            </article>
+          ))}
         </div>
 
         <form className="reflect-composer" onSubmit={handleSubmit}>
@@ -170,7 +256,7 @@ export function ChatPageShell() {
               <textarea
                 className="reflect-textarea"
                 onChange={(event) => setInput(event.target.value)}
-                placeholder="Ask a question about your reflection..."
+                placeholder="Ask about what stood out, what repeated, or where you want clarity..."
                 value={input}
               />
               <button
@@ -183,41 +269,6 @@ export function ChatPageShell() {
               </button>
             </div>
           </label>
-
-          <div className="reflect-metrics-row">
-            <label className="label">
-              Steps
-              <input
-                className="input"
-                inputMode="numeric"
-                onChange={(event) => setSteps(event.target.value)}
-                placeholder="6840"
-                value={steps}
-              />
-            </label>
-
-            <label className="label">
-              Sleep hours
-              <input
-                className="input"
-                inputMode="decimal"
-                onChange={(event) => setSleepHours(event.target.value)}
-                placeholder="6.5"
-                value={sleepHours}
-              />
-            </label>
-
-            <label className="label">
-              HRV (ms)
-              <input
-                className="input"
-                inputMode="decimal"
-                onChange={(event) => setHrvMs(event.target.value)}
-                placeholder="42"
-                value={hrvMs}
-              />
-            </label>
-          </div>
 
           {error ? <div className="error-banner">{error}</div> : null}
         </form>

@@ -46,10 +46,7 @@ describe("chat client", () => {
       expect(init?.body).toBe(
         JSON.stringify({
           goals: [],
-          hrv_ms: 42,
           journal_entry: "I said I was fine but I was exhausted.",
-          sleep_hours: 6.5,
-          steps: 6840,
           thread_id: "dashboard-chat",
         }),
       );
@@ -63,11 +60,8 @@ describe("chat client", () => {
     await sendChatMessage(
       {
         accessToken: "token-123",
-        hrvMs: 42,
         journalEntry: "I said I was fine but I was exhausted.",
         onToken,
-        sleepHours: 6.5,
-        steps: 6840,
         threadId: "dashboard-chat",
       },
       fetcher as typeof fetch,

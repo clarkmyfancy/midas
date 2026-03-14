@@ -6,6 +6,7 @@ import os
 import re
 from base64 import b64encode
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin
@@ -65,6 +66,7 @@ class ExtractedEntity(BaseModel):
     aliases: list[str] = Field(default_factory=list)
     needs_clarification: bool = False
     resolution_notes: str | None = None
+    candidate_canonical_name: str | None = None
 
 
 class ExtractedRelationship(BaseModel):
@@ -229,7 +231,7 @@ def canonicalize_entity(
     user_id: str,
     entity_type: str,
     raw_name: str,
-) -> tuple[str, list[str], bool, str | None]:
+) -> tuple[str, list[str], bool, str | None, str | None]:
     cleaned = re.sub(r"\s+", " ", raw_name.strip())
     lowered = cleaned.lower()
     resolution = get_alias_resolution_for_user(
@@ -243,20 +245,39 @@ def canonicalize_entity(
             [cleaned],
             False,
             f"Applied user clarification '{resolution.resolution}' for '{cleaned}'.",
+            None,
         )
     if entity_type == "person":
         tokens = [token for token in re.split(r"[\s\-]+", lowered) if token]
         if tokens:
             canonical_first = PERSON_ALIAS_MAP.get(tokens[0], tokens[0])
-            canonical = normalize_name(" ".join([canonical_first, *tokens[1:]]))
             needs_clarification = canonical_first != tokens[0] and len(tokens) == 1
-            note = (
-                f"Normalized alias '{tokens[0]}' to '{canonical_first}'."
-                if canonical_first != tokens[0]
-                else None
-            )
-            return canonical, [cleaned], needs_clarification, note
-    return normalize_name(cleaned), [cleaned], False, None
+            if needs_clarification:
+                return (
+                    normalize_name(cleaned),
+                    [cleaned],
+                    True,
+                    f"'{cleaned}' might refer to '{canonical_first}'. Waiting for user confirmation.",
+                    normalize_name(" ".join([canonical_first, *tokens[1:]])),
+                )
+            return normalize_name(" ".join([canonical_first, *tokens[1:]])), [cleaned], False, None, None
+    return normalize_name(cleaned), [cleaned], False, None, None
+
+
+def name_similarity(left: str, right: str) -> float:
+    return SequenceMatcher(None, normalize_name(left), normalize_name(right)).ratio()
+
+
+def is_potential_person_match(left: str, right: str) -> bool:
+    left_normalized = normalize_name(left)
+    right_normalized = normalize_name(right)
+    if not left_normalized or not right_normalized or left_normalized == right_normalized:
+        return False
+    if left_normalized[0] != right_normalized[0]:
+        return False
+    if abs(len(left_normalized) - len(right_normalized)) > 2:
+        return False
+    return name_similarity(left_normalized, right_normalized) >= 0.78
 
 
 def split_sentences(text: str) -> list[str]:
@@ -433,7 +454,13 @@ def heuristic_extract_graph(entry: JournalEntryRecord) -> GraphExtraction:
         needs_clarification: bool = False,
         resolution_notes: str | None = None,
     ) -> ExtractedEntity:
-        canonical_name, aliases, canonical_needs_clarification, canonical_note = canonicalize_entity(
+        (
+            canonical_name,
+            aliases,
+            canonical_needs_clarification,
+            canonical_note,
+            candidate_canonical_name,
+        ) = canonicalize_entity(
             entry.user_id,
             entity_type,
             name,
@@ -453,6 +480,7 @@ def heuristic_extract_graph(entry: JournalEntryRecord) -> GraphExtraction:
                 aliases=aliases,
                 needs_clarification=resolved_clarification,
                 resolution_notes=resolved_note,
+                candidate_canonical_name=candidate_canonical_name,
             )
         else:
             current = ExtractedEntity(
@@ -464,6 +492,7 @@ def heuristic_extract_graph(entry: JournalEntryRecord) -> GraphExtraction:
                 aliases=sorted({*current.aliases, *aliases}),
                 needs_clarification=current.needs_clarification or resolved_clarification,
                 resolution_notes=current.resolution_notes or resolved_note,
+                candidate_canonical_name=current.candidate_canonical_name or candidate_canonical_name,
             )
         entity_index[key] = current
         return current
@@ -702,6 +731,7 @@ class GraphProjector:
                 "Use only relationship types: affected, supported, conflicts_with, led_up_to, triggered_by, precedes, causes, recurs, about, contributed_to, experienced.",
                 "Canonicalize aliases when they likely refer to the same thing, for example Josh and Joshua.",
                 "If an alias merge is plausible but uncertain, set needs_clarification=true and explain why in resolution_notes.",
+                "When uncertain, keep the raw person name as the entity itself and put the suggested merge target in candidate_canonical_name.",
                 "Return concise evidence grounded in the journal text or biometric payload. Do not invent entities.",
                 f"Journal entry: {entry.journal_entry}",
                 f"Goals: {', '.join(entry.goals) if entry.goals else 'None provided'}",
@@ -712,26 +742,163 @@ class GraphProjector:
         )
         return llm.invoke(prompt)
 
+    def list_entities(self, user_id: str, entity_type: str) -> list[dict[str, Any]]:
+        try:
+            result = self._query(
+                """
+                MATCH (e:Entity {user_id: $user_id, entity_type: $entity_type})
+                RETURN e.canonical_name AS canonical_name,
+                       e.display_name AS display_name,
+                       coalesce(e.aliases, []) AS aliases,
+                       coalesce(e.max_confidence, 0.0) AS max_confidence,
+                       coalesce(e.observation_count, 0) AS observation_count
+                ORDER BY observation_count DESC, max_confidence DESC
+                LIMIT 200
+                """,
+                {"user_id": user_id, "entity_type": entity_type},
+            )
+        except RuntimeError:
+            return []
+        rows = result.get("results", [{}])[0].get("data", [])
+        return [dict(zip(("canonical_name", "display_name", "aliases", "max_confidence", "observation_count"), row.get("row", []), strict=False)) for row in rows]
+
+    def _prepare_entity_for_storage(
+        self,
+        entry: JournalEntryRecord,
+        entity: ExtractedEntity,
+        existing_people: list[dict[str, Any]],
+    ) -> ExtractedEntity:
+        aliases = sorted({alias.strip() for alias in [entity.name, *entity.aliases] if alias.strip()})
+        raw_canonical_name = normalize_name(entity.name)
+        candidate_canonical_name = (
+            normalize_name(entity.candidate_canonical_name)
+            if entity.candidate_canonical_name
+            else None
+        )
+
+        if entity.needs_clarification:
+            if candidate_canonical_name is None and entity.canonical_name != raw_canonical_name:
+                candidate_canonical_name = normalize_name(entity.canonical_name)
+            return ExtractedEntity(
+                entity_type=entity.entity_type,
+                name=entity.name,
+                canonical_name=raw_canonical_name,
+                confidence=min(entity.confidence, 0.72),
+                evidence=entity.evidence,
+                aliases=aliases,
+                needs_clarification=True,
+                resolution_notes=entity.resolution_notes,
+                candidate_canonical_name=candidate_canonical_name,
+            )
+
+        if entity.entity_type != "person":
+            return ExtractedEntity(
+                entity_type=entity.entity_type,
+                name=entity.name,
+                canonical_name=normalize_name(entity.canonical_name),
+                confidence=entity.confidence,
+                evidence=entity.evidence,
+                aliases=aliases,
+                needs_clarification=False,
+                resolution_notes=entity.resolution_notes,
+                candidate_canonical_name=None,
+            )
+
+        best_match: dict[str, Any] | None = None
+        best_score = 0.0
+        for candidate in existing_people:
+            candidate_canonical = normalize_name(str(candidate.get("canonical_name") or candidate.get("display_name") or ""))
+            if not is_potential_person_match(raw_canonical_name, candidate_canonical):
+                continue
+            score = name_similarity(raw_canonical_name, candidate_canonical)
+            if score > best_score:
+                best_match = candidate
+                best_score = score
+
+        if best_match is None:
+            return ExtractedEntity(
+                entity_type=entity.entity_type,
+                name=entity.name,
+                canonical_name=normalize_name(entity.canonical_name),
+                confidence=entity.confidence,
+                evidence=entity.evidence,
+                aliases=aliases,
+                needs_clarification=False,
+                resolution_notes=entity.resolution_notes,
+                candidate_canonical_name=None,
+            )
+
+        candidate_canonical_name = normalize_name(
+            str(best_match.get("canonical_name") or best_match.get("display_name") or raw_canonical_name)
+        )
+        return ExtractedEntity(
+            entity_type=entity.entity_type,
+            name=entity.name,
+            canonical_name=raw_canonical_name,
+            confidence=min(entity.confidence, round(best_score, 2)),
+            evidence=entity.evidence,
+            aliases=aliases,
+            needs_clarification=True,
+            resolution_notes=(
+                f"'{entity.name}' looks similar to existing person "
+                f"'{display_name_from_canonical(candidate_canonical_name)}' and needs confirmation."
+            ),
+            candidate_canonical_name=candidate_canonical_name,
+        )
+
+    def prepare_extraction(self, entry: JournalEntryRecord, extraction: GraphExtraction) -> GraphExtraction:
+        existing_people = self.list_entities(entry.user_id, "person")
+        prepared_entities: list[ExtractedEntity] = []
+        canonical_name_map: dict[str, str] = {}
+        for entity in extraction.entities:
+            prepared = self._prepare_entity_for_storage(entry, entity, existing_people)
+            prepared_entities.append(prepared)
+            canonical_name_map[entity.canonical_name] = prepared.canonical_name
+
+        prepared_relationships: list[ExtractedRelationship] = []
+        for relationship in extraction.relationships:
+            prepared_relationships.append(
+                ExtractedRelationship(
+                    source_canonical_name=canonical_name_map.get(
+                        relationship.source_canonical_name,
+                        relationship.source_canonical_name,
+                    ),
+                    target_canonical_name=canonical_name_map.get(
+                        relationship.target_canonical_name,
+                        relationship.target_canonical_name,
+                    ),
+                    relationship_type=relationship.relationship_type,
+                    confidence=relationship.confidence,
+                    evidence=relationship.evidence,
+                )
+            )
+        return GraphExtraction(
+            summary=extraction.summary,
+            entities=prepared_entities,
+            relationships=prepared_relationships,
+        )
+
     def project(self, job: ProjectionJobRecord, entry: JournalEntryRecord) -> None:
-        extraction = self.extract(entry)
+        extraction = self.prepare_extraction(entry, self.extract(entry))
         for entity in extraction.entities:
             if not entity.needs_clarification or not entity.aliases:
                 continue
-            alias_candidates = [alias for alias in entity.aliases if normalize_name(alias) != entity.canonical_name]
-            raw_name = alias_candidates[0] if alias_candidates else entity.aliases[0]
+            raw_name = entity.name
+            candidate_canonical_name = entity.candidate_canonical_name or entity.canonical_name
+            candidate_display_name = display_name_from_canonical(candidate_canonical_name).title()
             create_clarification_task_for_user(
                 user_id=entry.user_id,
                 source_record_id=entry.id,
                 entity_type=entity.entity_type,
                 raw_name=raw_name,
-                candidate_canonical_name=entity.canonical_name,
+                candidate_canonical_name=candidate_canonical_name,
                 prompt=(
-                    f"Does '{raw_name}' refer to '{entity.name}' in this entry, "
+                    f"Does '{raw_name}' refer to '{candidate_display_name}' in this entry, "
                     f"or should it stay separate?"
                 ),
                 options=["confirm_merge", "keep_separate", "dismiss"],
                 confidence=entity.confidence,
-                evidence=entity.evidence,
+                evidence=entity.resolution_notes or entity.evidence,
             )
 
         self.ensure_schema()

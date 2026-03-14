@@ -805,6 +805,12 @@ h2 {
   border-color: rgba(197, 170, 130, 0.95);
 }
 
+.reflect-clarification-message {
+  max-width: min(72%, 980px);
+  border-color: rgba(211, 138, 99, 0.9);
+  background: rgba(250, 239, 229, 0.98);
+}
+
 .reflect-message-meta {
   margin-bottom: 8px;
   color: #667066;
@@ -821,6 +827,19 @@ h2 {
   font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: 1rem;
   line-height: 1.55;
+}
+
+.reflect-message-body p {
+  margin: 0;
+}
+
+.reflect-message-body p + p {
+  margin-top: 10px;
+}
+
+.reflect-clarification-evidence {
+  color: #6b6259;
+  font-size: 0.92rem;
 }
 
 .reflect-composer {

@@ -308,7 +308,7 @@ async def create_reflection(
         update={"thread_id": f"user:{user.id}:{thread_suffix}"}
     )
     if os.getenv("MIDAS_AUTO_PROJECT", "0") == "1":
-        background_tasks.add_task(process_pending_projection_jobs, limit=10, user_id=user.id)
+        process_pending_projection_jobs(limit=10, user_id=user.id)
     return StreamingResponse(
         stream_reflection_events(resolved_payload),
         media_type="text/event-stream",

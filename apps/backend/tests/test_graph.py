@@ -17,7 +17,7 @@ def test_reflection_workflow_returns_summary_and_trace() -> None:
         )
     )
 
-    assert "detected the following themes" in result.summary
+    assert "What stands out:" in result.summary
     assert result.findings
     assert len(result.trace) == 2
     assert result.trace[1].startswith("core_reflection_coach:")

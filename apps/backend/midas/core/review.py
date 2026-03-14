@@ -123,46 +123,46 @@ def build_weekly_review(*, user_id: str, window_days: int = 7) -> WeeklyReviewRe
     )
 
     findings: list[ReviewFinding] = []
-    if entries:
+    if clarifications:
         findings.append(
             ReviewFinding(
-                title="Recent journaling volume",
-                detail=f"You logged {len(entries)} entries in the last {window_days} days.",
-                evidence=[entry.journal_entry for entry in entries[:2]],
-            )
-        )
-    if goal_counter:
-        top_goals = ", ".join(goal for goal, _count in goal_counter.most_common(3))
-        findings.append(
-            ReviewFinding(
-                title="Most active goals",
-                detail=f"Your recent entries focused most on: {top_goals}.",
-                evidence=[f"{goal}: {count} entries" for goal, count in goal_counter.most_common(3)],
+                title="Pending clarifications",
+                detail=f"There are {len(clarifications)} names or aliases that still need your confirmation.",
+                evidence=[task.prompt for task in clarifications[:3]],
             )
         )
     if relationship_counter:
         top_relationship = relationship_counter.most_common(1)[0]
         findings.append(
             ReviewFinding(
-                title="Graph pattern",
-                detail=f"The graph most often linked experiences through '{top_relationship[0]}' relationships.",
-                evidence=[f"{name}: {count}" for name, count in relationship_counter.most_common(3)],
+                title="Recurring pattern",
+                detail=f"Your stored graph most often links recent experiences through '{top_relationship[0].replace('_', ' ')}'.",
+                evidence=[f"{name.replace('_', ' ')}: {count}" for name, count in relationship_counter.most_common(3)],
             )
         )
-    if memory_counter:
+    if entity_counter:
         findings.append(
             ReviewFinding(
-                title="Memory artifacts",
-                detail="Weekly review is pulling from stored Weaviate artifacts instead of only raw journal text.",
-                evidence=[f"{name}: {count}" for name, count in memory_counter.most_common(3)],
+                title="What kept resurfacing",
+                detail="These people, places, or themes appeared most often across the review window.",
+                evidence=[f"{name}: {count} mentions" for name, count in entity_counter.most_common(4)],
             )
         )
-    if clarifications:
+    if goal_counter:
+        top_goals = ", ".join(goal for goal, _count in goal_counter.most_common(3))
         findings.append(
             ReviewFinding(
-                title="Pending clarifications",
-                detail=f"There are {len(clarifications)} unresolved name or alias questions that can sharpen future graph extraction.",
-                evidence=[task.prompt for task in clarifications[:3]],
+                title="Explicit priorities",
+                detail=f"You explicitly named these priorities most often: {top_goals}.",
+                evidence=[f"{goal}: {count} entries" for goal, count in goal_counter.most_common(3)],
+            )
+        )
+    if entries and not findings:
+        findings.append(
+            ReviewFinding(
+                title="Recent entries",
+                detail=f"There are {len(entries)} entries in the last {window_days} days.",
+                evidence=[entry.journal_entry for entry in entries[:3]],
             )
         )
 
@@ -181,10 +181,16 @@ def build_weekly_review(*, user_id: str, window_days: int = 7) -> WeeklyReviewRe
     top_entities = ", ".join(name for name, _count in entity_counter.most_common(3))
     if findings:
         summary_parts = [finding.detail for finding in findings[:3]]
+    elif entries:
+        summary_parts = [f"You logged {len(entries)} entries in the last {window_days} days."]
     else:
         summary_parts = ["No recent review signals were found yet."]
     if top_entities:
         summary_parts.append(f"Most visible entities: {top_entities}.")
+    if memory_counter:
+        summary_parts.append(
+            f"Retrieved memory snapshots: {', '.join(name.replace('_', ' ') for name, _count in memory_counter.most_common(2))}."
+        )
     summary = " ".join(summary_parts)
 
     return WeeklyReviewResult(

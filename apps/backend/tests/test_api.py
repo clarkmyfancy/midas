@@ -71,8 +71,8 @@ def test_reflection_endpoint() -> None:
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
-    assert "data: - Semantic drift:" in body
-    assert "data: - HRV and sleep suggest strain" in body
+    assert "data: - You describe pushing through strain instead of naming it directly." in body
+    assert "data: - Work pressure seems to be crowding out recovery." in body
 
 
 def test_reflection_endpoint_api_alias() -> None:
@@ -91,7 +91,7 @@ def test_reflection_endpoint_api_alias() -> None:
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
-    assert "data: - Semantic drift:" in body
+    assert "data: - You describe pushing through strain instead of naming it directly." in body
 
 
 def test_reflection_endpoint_requires_bearer_token() -> None:

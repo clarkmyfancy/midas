@@ -1,5 +1,6 @@
 import type {
   ClarificationResolveRequest,
+  ClarificationTaskListResponse,
   ClarificationTaskResponse,
   WeeklyReviewResponse,
 } from "@midas/types";
@@ -13,6 +14,21 @@ export function getWeeklyReview(
 ) {
   return requestJson<WeeklyReviewResponse>(
     `/api/v1/review?window_days=${windowDays}`,
+    {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      method: "GET",
+    },
+    fetcher,
+  );
+}
+
+export function listClarifications(
+  accessToken: string,
+  taskStatus = "pending",
+  fetcher: typeof fetch = fetch,
+) {
+  return requestJson<ClarificationTaskListResponse>(
+    `/api/v1/clarifications?task_status=${taskStatus}`,
     {
       headers: { Authorization: `Bearer ${accessToken}` },
       method: "GET",

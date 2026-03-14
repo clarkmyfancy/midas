@@ -56,7 +56,7 @@ def test_reflection_endpoint_persists_canonical_journal_entry() -> None:
         body = "".join(response.iter_text())
 
     assert response.status_code == 200
-    assert "data: - Semantic drift:" in body
+    assert "data: - You describe pushing through strain instead of naming it directly." in body
 
     list_response = client.get(
         "/v1/journal-entries",

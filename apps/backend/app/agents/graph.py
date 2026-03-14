@@ -25,13 +25,14 @@ except ImportError:  # pragma: no cover - optional dependency in local dev until
     PostgresSaver = None
 
 
-HABIT_ANALYST_SYSTEM_PROMPT = """You are Midas's habit analyst.
+HABIT_ANALYST_SYSTEM_PROMPT = """You are Midas's reflection analyst.
 
-Detect semantic drift between the user's stated intentions in the journal and the synthetic health snapshot they provided.
-Semantic drift means the story they tell about their day does not fully match their recovery, activity, or physiological signals.
-Prioritize mismatches between the journal narrative and health metrics, then note one reinforcing pattern if it exists.
 Return exactly 3 bullet findings, one per line, each starting with "- ".
 Keep each finding under 18 words.
+Only use information that is actually present.
+If biometrics are missing, do not mention them.
+Prioritize concrete tensions, recurring patterns, named people, places, projects, moods, and behavior shifts.
+When biometrics are present, mention them only if they materially change the interpretation.
 Do not add a heading, numbering, or conclusion.
 """
 
@@ -89,7 +90,7 @@ def parse_analyst_findings(raw_text: str) -> list[str]:
         return findings[:3]
 
     fallback = raw_text.strip()
-    return [fallback] if fallback else ["Health signals did not produce a usable semantic drift analysis"]
+    return [fallback] if fallback else ["The entry did not yield a concrete reflection pattern"]
 
 
 def make_habit_analyst_node(
@@ -101,18 +102,16 @@ def make_habit_analyst_node(
         writer = get_stream_writer()
         streamed_text: list[str] = []
 
-        prompt = "\n".join(
-            [
-                f"Journal entry: {state['journal_entry']}",
-                f"Goals: {', '.join(state['goals']) if state['goals'] else 'None provided'}",
-                f"Steps: {state['steps'] if state['steps'] is not None else 'missing'}",
-                (
-                    "Sleep hours: "
-                    f"{state['sleep_hours'] if state['sleep_hours'] is not None else 'missing'}"
-                ),
-                f"HRV (ms): {state['hrv_ms'] if state['hrv_ms'] is not None else 'missing'}",
-            ]
-        )
+        prompt_lines = [f"Journal entry: {state['journal_entry']}"]
+        if state["goals"]:
+            prompt_lines.append(f"Goals: {', '.join(state['goals'])}")
+        if state["steps"] is not None:
+            prompt_lines.append(f"Steps: {state['steps']}")
+        if state["sleep_hours"] is not None:
+            prompt_lines.append(f"Sleep hours: {state['sleep_hours']}")
+        if state["hrv_ms"] is not None:
+            prompt_lines.append(f"HRV (ms): {state['hrv_ms']}")
+        prompt = "\n".join(prompt_lines)
 
         async for chunk in analyst_chain.astream(
             [

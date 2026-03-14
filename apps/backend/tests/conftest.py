@@ -15,9 +15,9 @@ os.environ["OPENAI_API_KEY"] = ""
 class FakeHabitAnalystChain:
     async def astream(self, _messages):
         for token in [
-            "- Semantic drift: recovery signals stayed low despite upbeat journal framing.\n",
-            "- Movement intention looks stronger than the biometric follow-through.\n",
-            "- HRV and sleep suggest strain underneath the stated momentum.\n",
+            "- You describe pushing through strain instead of naming it directly.\n",
+            "- Work pressure seems to be crowding out recovery.\n",
+            "- The entry points to a tension you have not really resolved yet.\n",
         ]:
             yield AIMessageChunk(content=token)
 
