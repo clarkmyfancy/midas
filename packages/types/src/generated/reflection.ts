@@ -78,6 +78,8 @@ export interface ClarificationTaskResponse {
   evidence: string;
   resolution?: string | null;
   resolved_canonical_name?: string | null;
+  refresh_status?: string | null;
+  refresh_message?: string | null;
   created_at: string;
   resolved_at?: string | null;
 }

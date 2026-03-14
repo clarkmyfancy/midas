@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 from app.main import app
+from midas.core.memory import create_clarification_task_for_user
 
 
 client = TestClient(app)
@@ -188,3 +189,63 @@ def test_clarification_resolution_round_trip(monkeypatch) -> None:
     )
     assert thread_detail_response.status_code == 200
     assert thread_detail_response.json()["messages"][-1]["content"] == "- Corrected reply after alias resolution."
+
+
+def test_clarification_resolution_queues_retry_when_refresh_fails(monkeypatch) -> None:
+    def fail_reproject(entry, jobs) -> None:
+        raise RuntimeError("Neo4j unavailable")
+
+    monkeypatch.setattr("app.main.reproject_entry_artifacts", fail_reproject)
+    access_token = register_user("clarification-retry@example.com")
+
+    with client.stream(
+        "POST",
+        "/v1/reflections",
+        json={"journal_entry": "Tofian was there after the launch.", "goals": [], "thread_id": "clarification-retry"},
+        headers={"Authorization": f"Bearer {access_token}"},
+    ) as create_response:
+        assert create_response.status_code == 200
+        _ = "".join(create_response.iter_text())
+
+    run_response = client.post(
+        "/v1/projection-jobs/run?limit=10",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert run_response.status_code == 200
+
+    entries_response = client.get(
+        "/v1/journal-entries",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert entries_response.status_code == 200
+    entry = entries_response.json()["entries"][0]
+    entry_id = entry["id"]
+    task = create_clarification_task_for_user(
+        user_id=entry["user_id"],
+        source_record_id=entry_id,
+        entity_type="person",
+        raw_name="tofian",
+        candidate_canonical_name="torian",
+        prompt="Does 'tofian' refer to 'Torian' in this entry, or should it stay separate?",
+        options=["confirm_merge", "keep_separate", "dismiss"],
+        confidence=0.83,
+        evidence="'tofian' looks similar to existing person 'torian' and needs confirmation.",
+    )
+
+    resolve_response = client.post(
+        f"/v1/clarifications/{task.id}/resolve",
+        json={"resolution": "confirm_merge"},
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert resolve_response.status_code == 200
+    assert resolve_response.json()["status"] == "resolved"
+    assert resolve_response.json()["refresh_status"] == "queued"
+    assert "queued" in resolve_response.json()["refresh_message"].lower()
+
+    jobs_response = client.get(
+        f"/v1/journal-entries/{entry_id}/projection-jobs",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert jobs_response.status_code == 200
+    assert {job["status"] for job in jobs_response.json()["projection_jobs"]} == {"pending"}
+    assert all(job["last_error"] and "queued after failure" in job["last_error"] for job in jobs_response.json()["projection_jobs"])

@@ -92,6 +92,8 @@ class ClarificationTaskResponse(BaseModel):
     evidence: str
     resolution: str | None = None
     resolved_canonical_name: str | None = None
+    refresh_status: str | None = None
+    refresh_message: str | None = None
     created_at: datetime
     resolved_at: datetime | None = None
 

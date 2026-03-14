@@ -1,7 +1,9 @@
+import logging
 import os
 import re
-from pathlib import Path
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Annotated
 from uuid import uuid4
 
@@ -82,6 +84,7 @@ from midas.core.memory import (
     init_memory_storage,
     list_journal_entries_for_user,
     list_projection_jobs_for_user,
+    requeue_projection_jobs_for_user,
     replace_chat_message_for_user,
     resolve_clarification_task_for_user,
     update_chat_thread_title_for_user,
@@ -96,10 +99,22 @@ from midas.core.projections import (
 )
 from midas.core.review import build_weekly_review
 
+logger = logging.getLogger(__name__)
+
+@asynccontextmanager
+async def app_lifespan(_: FastAPI):
+    try:
+        process_pending_projection_jobs(limit=100)
+    except Exception:
+        logger.exception("Unable to process pending projection jobs during startup")
+    yield
+
+
 app = FastAPI(
     title="Midas API",
     version="0.1.0",
     description="Backend scaffold for the Midas multi-agent reflection system.",
+    lifespan=app_lifespan,
 )
 
 app.add_middleware(
@@ -176,7 +191,12 @@ def serialize_chat_message(message) -> ChatMessageResponse:
     )
 
 
-def serialize_clarification_task(task) -> ClarificationTaskResponse:
+def serialize_clarification_task(
+    task,
+    *,
+    refresh_status: str | None = None,
+    refresh_message: str | None = None,
+) -> ClarificationTaskResponse:
     return ClarificationTaskResponse(
         id=task.id,
         user_id=task.user_id,
@@ -191,6 +211,8 @@ def serialize_clarification_task(task) -> ClarificationTaskResponse:
         evidence=task.evidence,
         resolution=task.resolution,
         resolved_canonical_name=task.resolved_canonical_name,
+        refresh_status=refresh_status,
+        refresh_message=refresh_message,
         created_at=task.created_at,
         resolved_at=task.resolved_at,
     )
@@ -417,30 +439,52 @@ def resolve_clarification(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Clarification task not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    refresh_status = "not_needed"
+    refresh_message: str | None = None
     entry = get_journal_entry_for_user(user.id, task.source_record_id)
     if entry is not None:
         jobs = list_projection_jobs_for_user(user.id, source_record_id=task.source_record_id)
         try:
             reproject_entry_artifacts(entry, jobs)
+            refresh_status = "refreshed"
+            refresh_message = "Memory refreshed. Neo4j and Weaviate were updated for this entry."
         except Exception as exc:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Clarification was saved, but derived memory stores could not be refreshed.",
-            ) from exc
-        if entry.thread_id:
-            reflection = run_reflection_workflow(
-                build_reflection_request_for_entry(
-                    entry,
-                    thread_id=f"user:{user.id}:{entry.thread_id}",
-                )
-            )
-            replace_chat_message_for_user(
+            logger.exception("Clarification refresh failed for entry %s", entry.id)
+            requeue_projection_jobs_for_user(
                 user_id=user.id,
-                source_record_id=entry.id,
-                role="assistant",
-                content=render_reflection_text(reflection.findings, reflection.summary),
+                source_record_id=task.source_record_id,
+                message=f"Clarification refresh queued after failure: {exc}",
             )
-    return serialize_clarification_task(task)
+            refresh_status = "queued"
+            refresh_message = (
+                "Clarification saved. Memory refresh was queued and will retry when the server comes back online."
+            )
+        if entry.thread_id and refresh_status == "refreshed":
+            try:
+                reflection = run_reflection_workflow(
+                    build_reflection_request_for_entry(
+                        entry,
+                        thread_id=f"user:{user.id}:{entry.thread_id}",
+                    )
+                )
+                replace_chat_message_for_user(
+                    user_id=user.id,
+                    source_record_id=entry.id,
+                    role="assistant",
+                    content=render_reflection_text(reflection.findings, reflection.summary),
+                )
+            except Exception:
+                logger.exception("Assistant reply refresh failed for entry %s", entry.id)
+                refresh_status = "refreshed"
+                refresh_message = (
+                    "Memory refreshed. Neo4j and Weaviate were updated, but the saved assistant reply could not be refreshed."
+                )
+    return serialize_clarification_task(
+        task,
+        refresh_status=refresh_status,
+        refresh_message=refresh_message,
+    )
 
 
 @app.post("/api/v1/reflections")

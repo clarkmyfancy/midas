@@ -185,6 +185,15 @@ class MemoryStore:
     def mark_projection_job_failed(self, job_id: str, message: str) -> ProjectionJobRecord:
         raise NotImplementedError
 
+    def requeue_projection_jobs(
+        self,
+        *,
+        user_id: str,
+        source_record_id: str,
+        message: str | None = None,
+    ) -> list[ProjectionJobRecord]:
+        raise NotImplementedError
+
     def create_clarification_task(
         self,
         *,
@@ -776,6 +785,37 @@ class MemoryMemoryStore(MemoryStore):
             )
             self._jobs_by_id[job_id] = updated
         return updated
+
+    def requeue_projection_jobs(
+        self,
+        *,
+        user_id: str,
+        source_record_id: str,
+        message: str | None = None,
+    ) -> list[ProjectionJobRecord]:
+        with self._lock:
+            job_ids = list(self._job_ids_by_user.get(user_id, []))
+            updated_jobs: list[ProjectionJobRecord] = []
+            for job_id in job_ids:
+                current = self._jobs_by_id[job_id]
+                if current.source_record_id != source_record_id:
+                    continue
+                updated = ProjectionJobRecord(
+                    id=current.id,
+                    user_id=current.user_id,
+                    source_record_id=current.source_record_id,
+                    source_record_type=current.source_record_type,
+                    projection_type=current.projection_type,
+                    status="pending",
+                    attempts=current.attempts,
+                    created_at=current.created_at,
+                    completed_at=None,
+                    last_error=message,
+                )
+                self._jobs_by_id[job_id] = updated
+                updated_jobs.append(updated)
+        updated_jobs.sort(key=lambda item: item.created_at)
+        return updated_jobs
 
     def create_clarification_task(
         self,
@@ -1551,6 +1591,29 @@ class PostgresMemoryStore(MemoryStore):
             raise KeyError(job_id)
         return self._build_job(row)
 
+    def requeue_projection_jobs(
+        self,
+        *,
+        user_id: str,
+        source_record_id: str,
+        message: str | None = None,
+    ) -> list[ProjectionJobRecord]:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE memory_projection_jobs
+                SET status = 'pending',
+                    completed_at = NULL,
+                    last_error = %s
+                WHERE user_id = %s AND source_record_id = %s
+                RETURNING id, user_id, source_record_id, source_record_type, projection_type, status, attempts, created_at, completed_at, last_error
+                """,
+                (message, user_id, source_record_id),
+            )
+            rows = cur.fetchall()
+            conn.commit()
+        return [self._build_job(row) for row in rows]
+
     def create_clarification_task(
         self,
         *,
@@ -2079,6 +2142,19 @@ def mark_projection_job_completed(job_id: str) -> ProjectionJobRecord:
 
 def mark_projection_job_failed(job_id: str, message: str) -> ProjectionJobRecord:
     return get_memory_store().mark_projection_job_failed(job_id, message)
+
+
+def requeue_projection_jobs_for_user(
+    *,
+    user_id: str,
+    source_record_id: str,
+    message: str | None = None,
+) -> list[ProjectionJobRecord]:
+    return get_memory_store().requeue_projection_jobs(
+        user_id=user_id,
+        source_record_id=source_record_id,
+        message=message,
+    )
 
 
 def create_clarification_task_for_user(

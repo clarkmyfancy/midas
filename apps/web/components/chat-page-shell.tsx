@@ -285,12 +285,15 @@ export function ChatPageShell() {
     setError(null);
     setSuccess(null);
     try {
-      await resolveClarification(session.accessToken, taskId, { resolution });
+      const response = await resolveClarification(session.accessToken, taskId, { resolution });
       await loadClarifications();
       if (selectedThreadId && threads.some((thread) => thread.id === selectedThreadId)) {
         await loadThread(selectedThreadId, true);
       }
-      setSuccess("Memory refreshed. Neo4j, Weaviate, and the stored thread were updated for this entry.");
+      setSuccess(
+        response.refresh_message ||
+          "Clarification saved. Future memory extraction will use this resolution.",
+      );
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : "Unable to resolve clarification.");
     } finally {
