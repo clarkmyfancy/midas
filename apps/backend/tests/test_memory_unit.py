@@ -75,6 +75,7 @@ def test_weaviate_schema_uses_date_and_filterable_metadata_defaults() -> None:
     assert properties_by_name["user_id"]["indexSearchable"] is False
     assert properties_by_name["source_record_id"]["indexSearchable"] is False
     assert properties_by_name["projection_type"]["indexSearchable"] is False
+    assert properties_by_name["organizations"]["indexSearchable"] is False
     assert properties_by_name["content"]["indexSearchable"] is True
     assert properties_by_name["normalized_content"]["indexSearchable"] is True
 
@@ -150,6 +151,48 @@ def test_weaviate_projection_payload_filters_bad_person_and_project_candidates()
     assert local_properties["projects"] == []
     assert "local_now" not in local_properties["canonical_entities"]
     assert "Focus on local now" not in local_content
+
+
+def test_weaviate_projection_payload_uses_shared_model_extraction_for_organizations(monkeypatch) -> None:
+    store = MemoryMemoryStore()
+    entry, jobs = store.create_journal_entry(
+        user_id="user-1",
+        journal_entry="OpenAI reached out about a possible partnership.",
+        goals=[],
+        thread_id="dashboard-chat",
+        steps=None,
+        sleep_hours=None,
+        hrv_ms=None,
+        source="reflection_api",
+    )
+    semantic_job = next(job for job in jobs if job.projection_type == WEAVIATE_SEMANTIC_SUMMARY_PROJECTION)
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(
+        "midas.core.projections.extract_graph_with_model",
+        lambda current_entry: GraphExtraction(
+            summary="Company outreach from OpenAI.",
+            entities=[
+                ExtractedEntity(
+                    entity_type="company",
+                    name="OpenAI",
+                    canonical_name="openai",
+                    confidence=0.93,
+                    evidence="The journal explicitly mentions OpenAI.",
+                    aliases=["OpenAI"],
+                )
+            ],
+            relationships=[],
+        ),
+    )
+
+    semantic_content, semantic_embedding_text, semantic_properties = build_weaviate_projection_payload(semantic_job, entry)
+
+    assert semantic_properties["organizations"] == ["OpenAI"]
+    assert semantic_properties["people"] == []
+    assert "openai" in semantic_properties["canonical_entities"]
+    assert "OpenAI" in semantic_content
+    assert "OpenAI" in semantic_embedding_text
 
 
 def test_memory_store_filters_jobs_by_user_and_source_record() -> None:

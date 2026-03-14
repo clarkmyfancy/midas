@@ -38,10 +38,23 @@ GRAPH_ENTITY_LABELS = {
     "habit": "Habit",
     "health_state": "HealthState",
     "mood": "Mood",
+    "organization": "Organization",
     "person": "Person",
     "place": "Place",
     "project": "Project",
     "substance": "Substance",
+}
+ALLOWED_ENTITY_TYPES = {
+    "context",
+    "goal",
+    "habit",
+    "health_state",
+    "mood",
+    "organization",
+    "person",
+    "place",
+    "project",
+    "substance",
 }
 ALLOWED_RELATIONSHIPS = {
     "affected",
@@ -71,6 +84,7 @@ WEAVIATE_CLASS_PROPERTIES = [
     {"name": "goals", "dataType": ["text[]"], "indexFilterable": True, "indexSearchable": False},
     {"name": "goals_text", "dataType": ["text"], "indexFilterable": False, "indexSearchable": True, "tokenization": "word"},
     {"name": "people", "dataType": ["text[]"], "indexFilterable": True, "indexSearchable": False},
+    {"name": "organizations", "dataType": ["text[]"], "indexFilterable": True, "indexSearchable": False},
     {"name": "projects", "dataType": ["text[]"], "indexFilterable": True, "indexSearchable": False},
     {"name": "contexts", "dataType": ["text[]"], "indexFilterable": True, "indexSearchable": False},
     {"name": "moods", "dataType": ["text[]"], "indexFilterable": True, "indexSearchable": False},
@@ -116,7 +130,7 @@ POSITIVE_COLLABORATION_TERMS = ("fun", "laughing", "great", "pumped", "working",
 class ExtractedEntity(BaseModel):
     entity_type: str = Field(
         ...,
-        description="One of person, place, context, mood, project, habit, goal, substance, health_state.",
+        description="One of person, organization, place, context, mood, project, habit, goal, substance, health_state.",
     )
     name: str = Field(..., min_length=1)
     canonical_name: str = Field(..., min_length=1)
@@ -189,6 +203,13 @@ def normalize_name(value: str) -> str:
 def sanitize_relationship_type(value: str) -> str:
     lowered = normalize_name(value)
     return lowered if lowered in ALLOWED_RELATIONSHIPS else "about"
+
+
+def sanitize_entity_type(value: str) -> str | None:
+    lowered = normalize_name(value)
+    if lowered in {"company", "org", "organisation"}:
+        return "organization"
+    return lowered if lowered in ALLOWED_ENTITY_TYPES else None
 
 
 PERSON_ALIAS_MAP = {
@@ -428,6 +449,20 @@ def is_valid_project_candidate(value: str) -> bool:
     return True
 
 
+def is_valid_organization_candidate(value: str) -> bool:
+    normalized = normalize_name(value)
+    if not normalized:
+        return False
+    tokens = [token for token in normalized.split("_") if token]
+    if not tokens:
+        return False
+    if any(token in PROJECT_STOPWORDS or token in SUMMARY_NOISE_TOKENS for token in tokens):
+        return False
+    if len(tokens) > 5:
+        return False
+    return True
+
+
 def deterministic_vector(text: str, *, dimensions: int = 16) -> list[float]:
     digest = hashlib.sha256(text.encode("utf-8")).digest()
     values: list[float] = []
@@ -506,6 +541,8 @@ def entity_display_names(
             continue
         if entity_type == "project" and not is_valid_project_candidate(display_name):
             continue
+        if entity_type == "organization" and not is_valid_organization_candidate(display_name):
+            continue
         if entity_type == "person":
             display_name = display_name.title()
         else:
@@ -530,6 +567,10 @@ def canonical_entity_names(extraction: GraphExtraction) -> list[str]:
                     else is_valid_project_candidate(entity.canonical_name)
                 )
             )
+            and (
+                entity.entity_type != "organization"
+                or is_valid_organization_candidate(entity.canonical_name)
+            )
         )
     )
 
@@ -546,9 +587,10 @@ def prune_people_against_projects(people: list[str], projects: list[str]) -> lis
 def build_semantic_memory_summary(entry: JournalEntryRecord, extraction: GraphExtraction) -> str:
     lowered_entry = entry.journal_entry.lower()
     projects = entity_display_names(extraction, "project", allow_generic=False)
+    organizations = entity_display_names(extraction, "organization", allow_generic=False)
     people = prune_people_against_projects(
         entity_display_names(extraction, "person", include_self=False, allow_generic=False),
-        projects,
+        [*projects, *organizations],
     )
     contexts = [
         *entity_display_names(extraction, "context", allow_generic=False),
@@ -580,6 +622,8 @@ def build_semantic_memory_summary(entry: JournalEntryRecord, extraction: GraphEx
             )
     elif projects:
         segments.append(f"Work centered on {format_display_list(projects)}.")
+    elif organizations:
+        segments.append(f"Organization context: {format_display_list(organizations)}.")
     elif people:
         if has_negative_collaboration:
             segments.append(f"Tense interaction involving {format_display_list(people)}.")
@@ -601,6 +645,8 @@ def build_semantic_memory_summary(entry: JournalEntryRecord, extraction: GraphEx
         segments.append(f"Active goals: {format_display_list(goals)}.")
     if contexts and not projects:
         segments.append(f"Relevant context: {format_display_list(contexts)}.")
+    if organizations and not projects:
+        segments.append(f"Relevant organization: {format_display_list(organizations)}.")
 
     if not segments:
         compressed = normalize_free_text(entry.journal_entry)
@@ -612,14 +658,16 @@ def build_semantic_memory_summary(entry: JournalEntryRecord, extraction: GraphEx
 def build_weaviate_projection_payload(
     job: ProjectionJobRecord,
     entry: JournalEntryRecord,
+    extraction: GraphExtraction | None = None,
 ) -> tuple[str, str, dict[str, Any]]:
-    extraction = heuristic_extract_graph(entry)
+    extraction = normalize_extraction(entry, extraction or extract_graph(entry))
     normalized_content = normalize_free_text(entry.journal_entry)
     goals = [normalize_free_text(goal) for goal in entry.goals]
     projects = entity_display_names(extraction, "project", allow_generic=False)
+    organizations = entity_display_names(extraction, "organization", allow_generic=False)
     people = prune_people_against_projects(
         entity_display_names(extraction, "person", include_self=False, allow_generic=False),
-        projects,
+        [*projects, *organizations],
     )
     metadata = {
         "user_id": entry.user_id,
@@ -632,6 +680,7 @@ def build_weaviate_projection_payload(
         "goals": goals,
         "goals_text": ", ".join(goals),
         "people": people,
+        "organizations": organizations,
         "projects": projects,
         "contexts": [
             *entity_display_names(extraction, "context", allow_generic=False),
@@ -656,6 +705,7 @@ def build_weaviate_projection_payload(
                     normalized_content,
                     metadata["goals_text"],
                     ", ".join(metadata["people"]),
+                    ", ".join(metadata["organizations"]),
                     ", ".join(metadata["projects"]),
                     ", ".join(metadata["contexts"]),
                     ", ".join(metadata["moods"]),
@@ -674,6 +724,7 @@ def build_weaviate_projection_payload(
                 content,
                 normalized_content,
                 metadata["goals_text"],
+                ", ".join(metadata["organizations"]),
                 ", ".join(metadata["canonical_entities"]),
             ],
         )
@@ -1066,6 +1117,120 @@ def heuristic_extract_graph(entry: JournalEntryRecord) -> GraphExtraction:
     return GraphExtraction(summary=summary, entities=entities, relationships=relationships_list)
 
 
+def normalize_extraction(entry: JournalEntryRecord, extraction: GraphExtraction) -> GraphExtraction:
+    normalized_entities: dict[tuple[str, str], ExtractedEntity] = {}
+    canonical_name_map: dict[str, str] = {}
+
+    for entity in extraction.entities:
+        entity_type = sanitize_entity_type(entity.entity_type)
+        if entity_type is None:
+            continue
+        canonical_name, aliases, needs_clarification, resolution_notes, candidate_canonical_name = canonicalize_entity(
+            entry.user_id,
+            entity_type,
+            entity.name or entity.canonical_name,
+        )
+        display_name = normalize_free_text(entity.name.strip() or display_name_from_canonical(canonical_name))
+        entity_key = (entity_type, canonical_name)
+        current = normalized_entities.get(entity_key)
+        normalized_entity = ExtractedEntity(
+            entity_type=entity_type,
+            name=display_name,
+            canonical_name=canonical_name,
+            confidence=entity.confidence,
+            evidence=normalize_free_text(entity.evidence),
+            aliases=sorted({*aliases, *[alias.strip() for alias in entity.aliases if alias.strip()], display_name}),
+            needs_clarification=entity.needs_clarification or needs_clarification,
+            resolution_notes=entity.resolution_notes or resolution_notes,
+            candidate_canonical_name=(
+                normalize_name(entity.candidate_canonical_name)
+                if entity.candidate_canonical_name
+                else candidate_canonical_name
+            ),
+        )
+        if current is None:
+            normalized_entities[entity_key] = normalized_entity
+        else:
+            normalized_entities[entity_key] = ExtractedEntity(
+                entity_type=current.entity_type,
+                name=current.name if len(current.name) >= len(normalized_entity.name) else normalized_entity.name,
+                canonical_name=current.canonical_name,
+                confidence=max(current.confidence, normalized_entity.confidence),
+                evidence=current.evidence if len(current.evidence) >= len(normalized_entity.evidence) else normalized_entity.evidence,
+                aliases=sorted({*current.aliases, *normalized_entity.aliases}),
+                needs_clarification=current.needs_clarification or normalized_entity.needs_clarification,
+                resolution_notes=current.resolution_notes or normalized_entity.resolution_notes,
+                candidate_canonical_name=current.candidate_canonical_name or normalized_entity.candidate_canonical_name,
+            )
+        canonical_name_map[entity.canonical_name] = canonical_name
+        canonical_name_map[normalize_name(entity.name)] = canonical_name
+
+    known_canonical_names = {entity.canonical_name for entity in normalized_entities.values()}
+    normalized_relationships: dict[tuple[str, str, str], ExtractedRelationship] = {}
+    for relationship in extraction.relationships:
+        source_canonical_name = canonical_name_map.get(
+            normalize_name(relationship.source_canonical_name),
+            canonical_name_map.get(relationship.source_canonical_name, relationship.source_canonical_name),
+        )
+        target_canonical_name = canonical_name_map.get(
+            normalize_name(relationship.target_canonical_name),
+            canonical_name_map.get(relationship.target_canonical_name, relationship.target_canonical_name),
+        )
+        if source_canonical_name != "observation" and source_canonical_name not in known_canonical_names:
+            continue
+        if target_canonical_name != "observation" and target_canonical_name not in known_canonical_names:
+            continue
+        relationship_key = (
+            source_canonical_name,
+            target_canonical_name,
+            sanitize_relationship_type(relationship.relationship_type),
+        )
+        current = normalized_relationships.get(relationship_key)
+        normalized_relationship = ExtractedRelationship(
+            source_canonical_name=source_canonical_name,
+            target_canonical_name=target_canonical_name,
+            relationship_type=relationship_key[2],
+            confidence=relationship.confidence,
+            evidence=normalize_free_text(relationship.evidence),
+        )
+        if current is None or normalized_relationship.confidence > current.confidence:
+            normalized_relationships[relationship_key] = normalized_relationship
+
+    normalized_summary = normalize_free_text(extraction.summary) if extraction.summary.strip() else build_episode_summary(entry)
+    return GraphExtraction(
+        summary=normalized_summary,
+        entities=list(normalized_entities.values()),
+        relationships=list(normalized_relationships.values()),
+    )
+
+
+def extract_graph_with_model(entry: JournalEntryRecord) -> GraphExtraction:
+    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0).with_structured_output(GraphExtraction)
+    prompt = "\n".join(
+        [
+            "Extract a compact but personally useful knowledge graph from this journal entry.",
+            "Use only entity types: person, organization, place, context, mood, project, habit, goal, substance, health_state.",
+            "Use organization for companies, teams, employers, clients, or institutions when they are not the project itself.",
+            "Use only relationship types: affected, supported, conflicts_with, led_up_to, triggered_by, precedes, causes, recurs, about, contributed_to, experienced.",
+            "Canonicalize aliases when they likely refer to the same thing, for example Josh and Joshua.",
+            "If an alias merge is plausible but uncertain, set needs_clarification=true and explain why in resolution_notes.",
+            "When uncertain, keep the raw name as the entity itself and put the suggested merge target in candidate_canonical_name.",
+            "Return concise evidence grounded in the journal text or biometric payload. Do not invent entities.",
+            f"Journal entry: {entry.journal_entry}",
+            f"Goals: {', '.join(entry.goals) if entry.goals else 'None provided'}",
+            f"Sleep hours: {entry.sleep_hours if entry.sleep_hours is not None else 'unknown'}",
+            f"HRV ms: {entry.hrv_ms if entry.hrv_ms is not None else 'unknown'}",
+            f"Steps: {entry.steps if entry.steps is not None else 'unknown'}",
+        ]
+    )
+    return llm.invoke(prompt)
+
+
+def extract_graph(entry: JournalEntryRecord) -> GraphExtraction:
+    raw_extraction = extract_graph_with_model(entry) if os.getenv("OPENAI_API_KEY") else heuristic_extract_graph(entry)
+    return normalize_extraction(entry, raw_extraction)
+
+
 class GraphProjector:
     def __init__(self, base_url: str | None = None, username: str | None = None, password: str | None = None) -> None:
         self.base_url = (base_url or os.getenv("NEO4J_HTTP_URL") or "http://127.0.0.1:7474").rstrip("/")
@@ -1101,27 +1266,7 @@ class GraphProjector:
         )
 
     def extract(self, entry: JournalEntryRecord) -> GraphExtraction:
-        if not os.getenv("OPENAI_API_KEY"):
-            return heuristic_extract_graph(entry)
-
-        llm = ChatOpenAI(model="gpt-4o-mini", temperature=0).with_structured_output(GraphExtraction)
-        prompt = "\n".join(
-            [
-                "Extract a compact but personally useful knowledge graph from this journal entry.",
-                "Use only entity types: person, place, context, mood, project, habit, goal, substance, health_state.",
-                "Use only relationship types: affected, supported, conflicts_with, led_up_to, triggered_by, precedes, causes, recurs, about, contributed_to, experienced.",
-                "Canonicalize aliases when they likely refer to the same thing, for example Josh and Joshua.",
-                "If an alias merge is plausible but uncertain, set needs_clarification=true and explain why in resolution_notes.",
-                "When uncertain, keep the raw person name as the entity itself and put the suggested merge target in candidate_canonical_name.",
-                "Return concise evidence grounded in the journal text or biometric payload. Do not invent entities.",
-                f"Journal entry: {entry.journal_entry}",
-                f"Goals: {', '.join(entry.goals) if entry.goals else 'None provided'}",
-                f"Sleep hours: {entry.sleep_hours if entry.sleep_hours is not None else 'unknown'}",
-                f"HRV ms: {entry.hrv_ms if entry.hrv_ms is not None else 'unknown'}",
-                f"Steps: {entry.steps if entry.steps is not None else 'unknown'}",
-            ]
-        )
-        return llm.invoke(prompt)
+        return extract_graph(entry)
 
     def list_entities(self, user_id: str, entity_type: str) -> list[dict[str, Any]]:
         try:
