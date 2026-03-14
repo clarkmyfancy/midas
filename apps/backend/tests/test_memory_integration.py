@@ -106,7 +106,8 @@ def test_delete_endpoint_removes_canonical_entry() -> None:
     assert list_response.json()["entries"] == []
 
 
-def test_clarification_resolution_round_trip() -> None:
+def test_clarification_resolution_round_trip(monkeypatch) -> None:
+    monkeypatch.setattr("app.main.reproject_entry_artifacts", lambda entry, jobs: None)
     access_token = register_user("clarification-integration@example.com")
 
     create_response = client.post(

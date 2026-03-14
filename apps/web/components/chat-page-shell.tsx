@@ -33,6 +33,7 @@ export function ChatPageShell() {
   const [clarifications, setClarifications] = useState<ClarificationTaskResponse[]>([]);
   const [input, setInput] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [resolvingTaskId, setResolvingTaskId] = useState<string | null>(null);
 
@@ -47,6 +48,14 @@ export function ChatPageShell() {
       aiPaneRef.current.scrollTop = aiPaneRef.current.scrollHeight;
     }
   }, [clarifications, messages]);
+
+  useEffect(() => {
+    if (!success) {
+      return;
+    }
+    const timeoutId = window.setTimeout(() => setSuccess(null), 4000);
+    return () => window.clearTimeout(timeoutId);
+  }, [success]);
 
   async function loadClarifications() {
     if (!session) {
@@ -99,6 +108,7 @@ export function ChatPageShell() {
     ]);
     setInput("");
     setError(null);
+    setSuccess(null);
     setIsStreaming(true);
 
     try {
@@ -165,9 +175,11 @@ export function ChatPageShell() {
 
     setResolvingTaskId(taskId);
     setError(null);
+    setSuccess(null);
     try {
       await resolveClarification(session.accessToken, taskId, { resolution });
       await loadClarifications();
+      setSuccess("Memory refreshed. Neo4j and Weaviate were updated for this entry.");
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : "Unable to resolve clarification.");
     } finally {
@@ -271,6 +283,7 @@ export function ChatPageShell() {
           </label>
 
           {error ? <div className="error-banner">{error}</div> : null}
+          {success ? <div className="success-banner">{success}</div> : null}
         </form>
       </section>
     </main>

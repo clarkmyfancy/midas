@@ -1795,3 +1795,19 @@ def delete_derived_artifacts(
     weaviate_result = weaviate.delete_objects(weaviate_job_ids)
     graph_result = graph.delete_observation(entry.id, entry.user_id)
     return weaviate_result, graph_result
+
+
+def reproject_entry_artifacts(
+    entry: JournalEntryRecord,
+    jobs: list[ProjectionJobRecord],
+) -> None:
+    delete_derived_artifacts(entry, jobs)
+    weaviate = WeaviateProjector()
+    graph = GraphProjector()
+    for job in jobs:
+        if job.projection_type.startswith("weaviate_"):
+            weaviate.project(job, entry)
+        elif job.projection_type == "neo4j_knowledge_graph":
+            graph.project(job, entry)
+        else:  # pragma: no cover - guarded by projection type definitions
+            raise RuntimeError(f"Unsupported projection type {job.projection_type}")

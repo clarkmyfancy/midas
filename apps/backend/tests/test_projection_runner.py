@@ -2,7 +2,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from midas.core.memory import create_clarification_task_for_user
-from midas.core.projections import build_weaviate_projection_payload
+from midas.core.projections import build_weaviate_projection_payload, extract_graph
 
 
 client = TestClient(app)
@@ -102,6 +102,74 @@ class FakeGraphProjector:
         return GraphCleanupResult(
             deleted_observation_ids=[observation_id] if observation_id else [],
             deleted_relationships=len(observation.get("relationships", [])),
+            deleted_entities=max(len(observation.get("nodes", [])) - 1, 0),
+        )
+
+    def browser_url(self) -> str:
+        return f"{self.base_url}/browser/"
+
+
+class TrackingGraphProjector:
+    observations: dict[tuple[str, str], dict] = {}
+
+    def __init__(self, base_url: str | None = None, username: str | None = None, password: str | None = None) -> None:
+        self.base_url = base_url or "http://127.0.0.1:7474"
+
+    def project(self, job, entry) -> None:
+        extraction = extract_graph(entry)
+        entity_nodes = [
+            {
+                "id": f"{job.id}:{entity.canonical_name}",
+                "labels": ["Entity", entity.entity_type.title()],
+                "properties": {
+                    "canonical_name": entity.canonical_name,
+                    "display_name": entity.name,
+                    "entity_type": entity.entity_type,
+                },
+            }
+            for entity in extraction.entities
+        ]
+        self.observations[(entry.user_id, entry.id)] = {
+            "observation": {
+                "id": job.id,
+                "labels": ["Observation"],
+                "properties": {
+                    "source_record_id": entry.id,
+                    "summary": extraction.summary,
+                },
+            },
+            "nodes": [
+                {
+                    "id": job.id,
+                    "labels": ["Observation"],
+                    "properties": {"source_record_id": entry.id},
+                },
+                *entity_nodes,
+            ],
+            "relationships": [],
+        }
+
+    def fetch_observation(self, source_record_id: str, user_id: str):
+        return self.observations.get(
+            (user_id, source_record_id),
+            {"observation": None, "nodes": [], "relationships": []},
+        )
+
+    def delete_observation(self, source_record_id: str, user_id: str):
+        from midas.core.projections import GraphCleanupResult
+
+        observation = self.observations.pop((user_id, source_record_id), None)
+        if observation is None:
+            return GraphCleanupResult(
+                deleted_observation_ids=[],
+                deleted_relationships=0,
+                deleted_entities=0,
+            )
+        observation_node = observation.get("observation")
+        observation_id = str(observation_node.get("id")) if observation_node else ""
+        return GraphCleanupResult(
+            deleted_observation_ids=[observation_id] if observation_id else [],
+            deleted_relationships=0,
             deleted_entities=max(len(observation.get("nodes", [])) - 1, 0),
         )
 
@@ -312,3 +380,76 @@ def test_review_endpoint_assembles_hybrid_memory_payload(monkeypatch) -> None:
     assert payload["memory_highlights"][0]["raw"]["properties"]["content_kind"] == "semantic_summary"
     assert payload["graph"]["nodes"]
     assert payload["clarifications"]
+
+
+def test_resolving_clarification_reprojects_weaviate_and_graph_artifacts(monkeypatch) -> None:
+    FakeWeaviateProjector.objects = {}
+    TrackingGraphProjector.observations = {}
+    monkeypatch.setattr("midas.core.projections.WeaviateProjector", FakeWeaviateProjector)
+    monkeypatch.setattr("midas.core.projections.GraphProjector", TrackingGraphProjector)
+    monkeypatch.setattr("app.main.WeaviateProjector", FakeWeaviateProjector)
+    monkeypatch.setattr("app.main.GraphProjector", TrackingGraphProjector)
+    monkeypatch.setenv("MIDAS_AUTO_PROJECT", "0")
+
+    access_token = register_user("clarification-reproject@example.com")
+    me_response = client.get(
+        "/v1/auth/me",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert me_response.status_code == 200
+    user_id = me_response.json()["id"]
+    entry_id = create_entry(access_token, "Josh joined me after the presentation.")
+
+    run_response = client.post(
+        "/v1/projection-jobs/run?limit=10",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert run_response.status_code == 200
+
+    jobs_response = client.get(
+        f"/v1/journal-entries/{entry_id}/projection-jobs",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert jobs_response.status_code == 200
+    semantic_job_id = next(
+        job["id"]
+        for job in jobs_response.json()["projection_jobs"]
+        if job["projection_type"] == "weaviate_semantic_summary"
+    )
+
+    assert "josh" in FakeWeaviateProjector.objects[semantic_job_id]["properties"]["canonical_entities"]
+    assert "joshua" not in FakeWeaviateProjector.objects[semantic_job_id]["properties"]["canonical_entities"]
+    initial_graph_entities = {
+        node["properties"].get("canonical_name")
+        for node in TrackingGraphProjector.observations[(user_id, entry_id)]["nodes"]
+        if "canonical_name" in node.get("properties", {})
+    }
+    assert "josh" in initial_graph_entities
+    assert "joshua" not in initial_graph_entities
+
+    task = create_clarification_task_for_user(
+        user_id=user_id,
+        source_record_id=entry_id,
+        entity_type="person",
+        raw_name="Josh",
+        candidate_canonical_name="joshua",
+        prompt="Does 'Josh' refer to 'Joshua' in this entry, or should it stay separate?",
+        options=["confirm_merge", "keep_separate", "dismiss"],
+        confidence=0.83,
+        evidence="'Josh' looks similar to existing person 'Joshua' and needs confirmation.",
+    )
+
+    resolve_response = client.post(
+        f"/v1/clarifications/{task.id}/resolve",
+        json={"resolution": "confirm_merge"},
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert resolve_response.status_code == 200
+
+    assert "joshua" in FakeWeaviateProjector.objects[semantic_job_id]["properties"]["canonical_entities"]
+    updated_graph_entities = {
+        node["properties"].get("canonical_name")
+        for node in TrackingGraphProjector.observations[(user_id, entry_id)]["nodes"]
+        if "canonical_name" in node.get("properties", {})
+    }
+    assert "joshua" in updated_graph_entities

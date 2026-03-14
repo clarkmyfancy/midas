@@ -27,6 +27,7 @@ export function ReviewPageShell() {
   const { isReady, logout, session } = useAuth();
   const [review, setReview] = useState<WeeklyReviewResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [resolvingTaskId, setResolvingTaskId] = useState<string | null>(null);
 
@@ -65,6 +66,14 @@ export function ReviewPageShell() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session]);
 
+  useEffect(() => {
+    if (!success) {
+      return;
+    }
+    const timeoutId = window.setTimeout(() => setSuccess(null), 4000);
+    return () => window.clearTimeout(timeoutId);
+  }, [success]);
+
   async function handleResolve(taskId: string, resolution: "confirm_merge" | "keep_separate" | "dismiss") {
     if (!session) {
       return;
@@ -72,9 +81,11 @@ export function ReviewPageShell() {
 
     setResolvingTaskId(taskId);
     setError(null);
+    setSuccess(null);
     try {
       await resolveClarification(session.accessToken, taskId, { resolution });
       await loadReview();
+      setSuccess("Memory refreshed. Neo4j and Weaviate were updated for this entry.");
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : "Unable to resolve clarification.");
     } finally {
@@ -104,6 +115,7 @@ export function ReviewPageShell() {
         </div>
         {review ? <p className="review-summary">{review.summary}</p> : null}
         {error ? <div className="error-banner">{error}</div> : null}
+        {success ? <div className="success-banner">{success}</div> : null}
       </section>
 
       <section className="review-stats-grid">

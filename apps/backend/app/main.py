@@ -77,6 +77,7 @@ from midas.core.projections import (
     WeaviateProjector,
     delete_derived_artifacts,
     process_pending_projection_jobs,
+    reproject_entry_artifacts,
 )
 from midas.core.review import build_weekly_review
 
@@ -292,6 +293,16 @@ def resolve_clarification(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Clarification task not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    entry = get_journal_entry_for_user(user.id, task.source_record_id)
+    if entry is not None:
+        jobs = list_projection_jobs_for_user(user.id, source_record_id=task.source_record_id)
+        try:
+            reproject_entry_artifacts(entry, jobs)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Clarification was saved, but derived memory stores could not be refreshed.",
+            ) from exc
     return serialize_clarification_task(task)
 
 
