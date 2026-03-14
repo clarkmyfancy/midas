@@ -13,9 +13,13 @@ except ImportError:  # pragma: no cover - local fallback until env is synced
     psycopg = None
 
 
+WEAVIATE_RAW_JOURNAL_PROJECTION = "weaviate_raw_journal_entry"
+WEAVIATE_SEMANTIC_SUMMARY_PROJECTION = "weaviate_semantic_summary"
+LEGACY_WEAVIATE_RAW_JOURNAL_PROJECTION = "weaviate_journal_memory"
+LEGACY_WEAVIATE_SEMANTIC_SUMMARY_PROJECTION = "weaviate_episode_summary"
 PROJECTION_TYPES = (
-    "weaviate_journal_memory",
-    "weaviate_episode_summary",
+    WEAVIATE_RAW_JOURNAL_PROJECTION,
+    WEAVIATE_SEMANTIC_SUMMARY_PROJECTION,
     "neo4j_knowledge_graph",
 )
 CLARIFICATION_RESOLUTIONS = (

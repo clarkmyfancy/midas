@@ -15,6 +15,14 @@ from midas.core.memory import (
 from midas.core.projections import GraphProjector, WeaviateProjector
 
 
+WEAVIATE_REVIEW_PREFERENCE = {
+    "weaviate_semantic_summary": 0,
+    "weaviate_episode_summary": 1,
+    "weaviate_raw_journal_entry": 2,
+    "weaviate_journal_memory": 3,
+}
+
+
 @dataclass(frozen=True)
 class ReviewFinding:
     title: str
@@ -75,6 +83,8 @@ def build_weekly_review(*, user_id: str, window_days: int = 7) -> WeeklyReviewRe
 
     for entry in entries:
         jobs = list_projection_jobs_for_user(user_id, source_record_id=entry.id)
+        preferred_artifact: dict[str, Any] | None = None
+        preferred_rank = 10**6
         for job in jobs:
             if not job.projection_type.startswith("weaviate_") or job.status != "completed":
                 continue
@@ -82,16 +92,20 @@ def build_weekly_review(*, user_id: str, window_days: int = 7) -> WeeklyReviewRe
             if artifact is None:
                 warnings.append(f"Weaviate artifact missing for {job.id}")
                 continue
-            memory_highlights.append(
-                {
-                    "projection_job_id": job.id,
-                    "object_id": str(artifact.get("id", job.id)),
-                    "class_name": str(artifact.get("class", "")),
-                    "content": dict(artifact.get("properties", {})).get("content"),
-                    "url": weaviate.object_url(job.id),
-                    "raw": artifact,
-                }
-            )
+            artifact_payload = {
+                "projection_job_id": job.id,
+                "object_id": str(artifact.get("id", job.id)),
+                "class_name": str(artifact.get("class", "")),
+                "content": dict(artifact.get("properties", {})).get("content"),
+                "url": weaviate.object_url(job.id),
+                "raw": artifact,
+            }
+            rank = WEAVIATE_REVIEW_PREFERENCE.get(job.projection_type, 100)
+            if preferred_artifact is None or rank < preferred_rank:
+                preferred_artifact = artifact_payload
+                preferred_rank = rank
+        if preferred_artifact is not None:
+            memory_highlights.append(preferred_artifact)
 
         try:
             observation = graph.fetch_observation(entry.id, user_id)

@@ -2,6 +2,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from midas.core.memory import create_clarification_task_for_user
+from midas.core.projections import build_weaviate_projection_payload
 
 
 client = TestClient(app)
@@ -14,18 +15,13 @@ class FakeWeaviateProjector:
         self.base_url = base_url or "http://127.0.0.1:8080"
 
     def project(self, job, entry) -> None:
-        content = (
-            entry.journal_entry
-            if job.projection_type == "weaviate_journal_memory"
-            else f"Episode summary: {entry.journal_entry}"
-        )
+        content, _embedding_text, properties = build_weaviate_projection_payload(job, entry)
         self.objects[job.id] = {
             "class": "MemoryArtifact",
             "id": job.id,
             "properties": {
+                **properties,
                 "content": content,
-                "source_record_id": entry.id,
-                "projection_type": job.projection_type,
             },
         }
 
@@ -312,5 +308,7 @@ def test_review_endpoint_assembles_hybrid_memory_payload(monkeypatch) -> None:
     assert payload["summary"]
     assert payload["entries"]
     assert payload["memory_highlights"]
+    assert len(payload["memory_highlights"]) == 1
+    assert payload["memory_highlights"][0]["raw"]["properties"]["content_kind"] == "semantic_summary"
     assert payload["graph"]["nodes"]
     assert payload["clarifications"]

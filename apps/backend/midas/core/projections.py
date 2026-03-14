@@ -19,7 +19,11 @@ from midas.core.memory import (
     create_clarification_task_for_user,
     get_alias_resolution_for_user,
     JournalEntryRecord,
+    LEGACY_WEAVIATE_RAW_JOURNAL_PROJECTION,
+    LEGACY_WEAVIATE_SEMANTIC_SUMMARY_PROJECTION,
     ProjectionJobRecord,
+    WEAVIATE_RAW_JOURNAL_PROJECTION,
+    WEAVIATE_SEMANTIC_SUMMARY_PROJECTION,
     get_journal_entry_for_user,
     list_pending_projection_jobs,
     mark_projection_job_completed,
@@ -52,6 +56,61 @@ ALLOWED_RELATIONSHIPS = {
     "contributed_to",
     "experienced",
 }
+WEAVIATE_PROJECTION_VERSION = "v2"
+WEAVIATE_CLASS_PROPERTIES = [
+    {"name": "user_id", "dataType": ["text"], "indexFilterable": True, "indexSearchable": False},
+    {"name": "source_record_id", "dataType": ["text"], "indexFilterable": True, "indexSearchable": False},
+    {"name": "source_record_type", "dataType": ["text"], "indexFilterable": True, "indexSearchable": False},
+    {"name": "projection_type", "dataType": ["text"], "indexFilterable": True, "indexSearchable": False},
+    {"name": "projection_version", "dataType": ["text"], "indexFilterable": True, "indexSearchable": False},
+    {"name": "content_kind", "dataType": ["text"], "indexFilterable": True, "indexSearchable": False},
+    {"name": "content", "dataType": ["text"], "indexFilterable": True, "indexSearchable": True, "tokenization": "word"},
+    {"name": "normalized_content", "dataType": ["text"], "indexFilterable": False, "indexSearchable": True, "tokenization": "word"},
+    {"name": "source", "dataType": ["text"], "indexFilterable": True, "indexSearchable": False},
+    {"name": "thread_id", "dataType": ["text"], "indexFilterable": True, "indexSearchable": False},
+    {"name": "goals", "dataType": ["text[]"], "indexFilterable": True, "indexSearchable": False},
+    {"name": "goals_text", "dataType": ["text"], "indexFilterable": False, "indexSearchable": True, "tokenization": "word"},
+    {"name": "people", "dataType": ["text[]"], "indexFilterable": True, "indexSearchable": False},
+    {"name": "projects", "dataType": ["text[]"], "indexFilterable": True, "indexSearchable": False},
+    {"name": "contexts", "dataType": ["text[]"], "indexFilterable": True, "indexSearchable": False},
+    {"name": "moods", "dataType": ["text[]"], "indexFilterable": True, "indexSearchable": False},
+    {"name": "canonical_entities", "dataType": ["text[]"], "indexFilterable": True, "indexSearchable": False},
+    {"name": "created_at", "dataType": ["date"], "indexFilterable": True, "indexRangeFilters": True},
+]
+COMMON_TYPO_CORRECTIONS = {
+    "becasue": "because",
+    "communicting": "communicating",
+    "definately": "definitely",
+    "recieve": "receive",
+    "seperate": "separate",
+}
+PROJECT_STOPWORDS = {
+    "app",
+    "current",
+    "it",
+    "local",
+    "now",
+    "one",
+    "project",
+    "recent",
+    "setup",
+    "that",
+    "thing",
+    "this",
+    "today",
+}
+PEOPLE_STOPWORDS = {
+    "and",
+    "hang",
+    "it",
+    "one",
+    "that",
+    "the",
+    "this",
+    "with",
+}
+NEGATIVE_COLLABORATION_TERMS = ("tough", "conflict", "blamed", "insulted", "throats", "issues", "argued")
+POSITIVE_COLLABORATION_TERMS = ("fun", "laughing", "great", "pumped", "working", "good")
 
 
 class ExtractedEntity(BaseModel):
@@ -157,7 +216,8 @@ CURRENT_USER_REFERENCES = {
     "myself",
     "self",
 }
-PERSON_STOPWORDS = {"After", "Before", "When", "While", "Because", "Later", "Then", "Today", "Yesterday"}
+PERSON_STOPWORDS = {"After", "Before", "When", "While", "Because", "Later", "Then", "Today", "Yesterday", "Sometimes"}
+SUMMARY_NOISE_TOKENS = {"sometimes", "something", "someone", "everything", "nothing"}
 KINSHIP_TITLES = {
     "brother",
     "sister",
@@ -207,7 +267,6 @@ PROJECT_PATTERNS = {
     "roadmap": "roadmap",
     "proposal": "proposal",
     "sprint": "sprint",
-    "project": "project",
 }
 HABIT_PATTERNS = {
     "workout": "workout",
@@ -330,6 +389,45 @@ def extract_phrase(pattern: str, text: str) -> list[str]:
     return results
 
 
+def extract_case_sensitive_phrase(pattern: str, text: str) -> list[str]:
+    matches = re.findall(pattern, text)
+    results: list[str] = []
+    for match in matches:
+        value = match if isinstance(match, str) else " ".join(match)
+        normalized = re.sub(r"\s+", " ", value.strip(" .,!?:;"))
+        if normalized:
+            results.append(normalized)
+    return results
+
+
+def is_valid_person_candidate(value: str) -> bool:
+    normalized = normalize_name(value)
+    if not normalized or normalized == CURRENT_USER_CANONICAL_NAME:
+        return False
+    tokens = [token for token in normalized.split("_") if token]
+    if not tokens:
+        return False
+    if any(token in PEOPLE_STOPWORDS or token in SUMMARY_NOISE_TOKENS for token in tokens):
+        return False
+    if any(token in PROJECT_STOPWORDS for token in tokens):
+        return False
+    return True
+
+
+def is_valid_project_candidate(value: str) -> bool:
+    normalized = normalize_name(value)
+    if not normalized:
+        return False
+    tokens = [token for token in normalized.split("_") if token]
+    if not tokens:
+        return False
+    if any(token in PROJECT_STOPWORDS or token in SUMMARY_NOISE_TOKENS for token in tokens):
+        return False
+    if len(tokens) > 3:
+        return False
+    return True
+
+
 def deterministic_vector(text: str, *, dimensions: int = 16) -> list[float]:
     digest = hashlib.sha256(text.encode("utf-8")).digest()
     values: list[float] = []
@@ -366,6 +464,223 @@ def build_episode_summary(entry: JournalEntryRecord) -> str:
     )
 
 
+def normalize_free_text(text: str) -> str:
+    normalized = re.sub(r"\s+", " ", text.strip())
+    for typo, correction in COMMON_TYPO_CORRECTIONS.items():
+        normalized = re.sub(rf"\b{re.escape(typo)}\b", correction, normalized, flags=re.IGNORECASE)
+    return normalized
+
+
+def format_display_list(values: list[str]) -> str:
+    unique_values = [value for value in dict.fromkeys(value.strip() for value in values if value.strip())]
+    if not unique_values:
+        return ""
+    if len(unique_values) == 1:
+        return unique_values[0]
+    if len(unique_values) == 2:
+        return f"{unique_values[0]} and {unique_values[1]}"
+    return ", ".join(unique_values[:-1]) + f", and {unique_values[-1]}"
+
+
+def entity_display_names(
+    extraction: GraphExtraction,
+    entity_type: str,
+    *,
+    include_self: bool = True,
+    allow_generic: bool = True,
+) -> list[str]:
+    names: list[str] = []
+    for entity in extraction.entities:
+        if entity.entity_type != entity_type:
+            continue
+        if entity.entity_type == "person" and (entity.canonical_name == CURRENT_USER_CANONICAL_NAME or is_current_user_reference(entity.name)):
+            if not include_self:
+                continue
+        display_name = normalize_free_text(entity.name if entity.name.strip() else display_name_from_canonical(entity.canonical_name))
+        normalized_display_name = normalize_name(display_name)
+        if any(token in SUMMARY_NOISE_TOKENS for token in normalized_display_name.split("_")):
+            continue
+        if not allow_generic and normalized_display_name in {"project", "work", "home"}:
+            continue
+        if entity_type == "person" and not is_valid_person_candidate(display_name):
+            continue
+        if entity_type == "project" and not is_valid_project_candidate(display_name):
+            continue
+        if entity_type == "person":
+            display_name = display_name.title()
+        else:
+            display_name = display_name.replace("_", " ")
+        names.append(display_name)
+    return list(dict.fromkeys(names))
+
+
+def canonical_entity_names(extraction: GraphExtraction) -> list[str]:
+    return list(
+        dict.fromkeys(
+            entity.canonical_name
+            for entity in extraction.entities
+            if entity.canonical_name
+            and entity.canonical_name not in {"observation", CURRENT_USER_CANONICAL_NAME, "project", "work", "home"}
+            and not any(token in SUMMARY_NOISE_TOKENS for token in normalize_name(entity.canonical_name).split("_"))
+            and (
+                entity.entity_type not in {"person", "project"}
+                or (
+                    is_valid_person_candidate(entity.canonical_name)
+                    if entity.entity_type == "person"
+                    else is_valid_project_candidate(entity.canonical_name)
+                )
+            )
+        )
+    )
+
+
+def prune_people_against_projects(people: list[str], projects: list[str]) -> list[str]:
+    project_names = {normalize_name(project) for project in projects}
+    return [
+        person
+        for person in people
+        if normalize_name(person) not in project_names
+    ]
+
+
+def build_semantic_memory_summary(entry: JournalEntryRecord, extraction: GraphExtraction) -> str:
+    lowered_entry = entry.journal_entry.lower()
+    projects = entity_display_names(extraction, "project", allow_generic=False)
+    people = prune_people_against_projects(
+        entity_display_names(extraction, "person", include_self=False, allow_generic=False),
+        projects,
+    )
+    contexts = [
+        *entity_display_names(extraction, "context", allow_generic=False),
+        *entity_display_names(extraction, "place", allow_generic=False),
+    ]
+    moods = entity_display_names(extraction, "mood")
+    habits = entity_display_names(extraction, "habit")
+    health_states = entity_display_names(extraction, "health_state")
+    goals = [normalize_free_text(goal) for goal in entry.goals]
+
+    segments: list[str] = []
+    has_negative_collaboration = any(term in lowered_entry for term in NEGATIVE_COLLABORATION_TERMS)
+    has_positive_collaboration = any(term in lowered_entry for term in POSITIVE_COLLABORATION_TERMS)
+
+    if projects and people:
+        project_text = format_display_list(projects)
+        people_text = format_display_list(people)
+        if has_negative_collaboration and has_positive_collaboration:
+            segments.append(
+                f"Mixed collaboration with {people_text} on {project_text}, including both positive moments and conflict."
+            )
+        elif has_negative_collaboration:
+            segments.append(
+                f"Strained collaboration with {people_text} on {project_text}."
+            )
+        else:
+            segments.append(
+                f"Work on {project_text} involving {people_text}."
+            )
+    elif projects:
+        segments.append(f"Work centered on {format_display_list(projects)}.")
+    elif people:
+        if has_negative_collaboration:
+            segments.append(f"Tense interaction involving {format_display_list(people)}.")
+        else:
+            segments.append(f"Interaction involving {format_display_list(people)}.")
+    elif contexts:
+        segments.append(f"Context centered on {format_display_list(contexts)}.")
+
+    if moods or health_states:
+        state_values = moods + health_states
+        segments.append(f"State signal: {format_display_list(state_values)}.")
+    if habits and goals:
+        segments.append(
+            f"Behavioral thread: {format_display_list(habits)} in relation to goals {format_display_list(goals)}."
+        )
+    elif habits:
+        segments.append(f"Behavioral thread: {format_display_list(habits)}.")
+    elif goals:
+        segments.append(f"Active goals: {format_display_list(goals)}.")
+    if contexts and not projects:
+        segments.append(f"Relevant context: {format_display_list(contexts)}.")
+
+    if not segments:
+        compressed = normalize_free_text(entry.journal_entry)
+        trimmed = " ".join(compressed.split()[:20]).rstrip(".,;:!?")
+        segments.append(f"Journal note about {trimmed}.")
+    return " ".join(segment.strip() for segment in segments if segment.strip())
+
+
+def build_weaviate_projection_payload(
+    job: ProjectionJobRecord,
+    entry: JournalEntryRecord,
+) -> tuple[str, str, dict[str, Any]]:
+    extraction = heuristic_extract_graph(entry)
+    normalized_content = normalize_free_text(entry.journal_entry)
+    goals = [normalize_free_text(goal) for goal in entry.goals]
+    projects = entity_display_names(extraction, "project", allow_generic=False)
+    people = prune_people_against_projects(
+        entity_display_names(extraction, "person", include_self=False, allow_generic=False),
+        projects,
+    )
+    metadata = {
+        "user_id": entry.user_id,
+        "source_record_id": entry.id,
+        "source_record_type": job.source_record_type,
+        "projection_type": job.projection_type,
+        "projection_version": WEAVIATE_PROJECTION_VERSION,
+        "source": entry.source,
+        "thread_id": entry.thread_id or "",
+        "goals": goals,
+        "goals_text": ", ".join(goals),
+        "people": people,
+        "projects": projects,
+        "contexts": [
+            *entity_display_names(extraction, "context", allow_generic=False),
+            *entity_display_names(extraction, "place", allow_generic=False),
+        ],
+        "moods": [*entity_display_names(extraction, "mood"), *entity_display_names(extraction, "health_state")],
+        "canonical_entities": canonical_entity_names(extraction),
+        "created_at": entry.created_at.isoformat(),
+    }
+
+    if job.projection_type in {
+        WEAVIATE_RAW_JOURNAL_PROJECTION,
+        LEGACY_WEAVIATE_RAW_JOURNAL_PROJECTION,
+    }:
+        content = entry.journal_entry
+        metadata["content_kind"] = "raw_journal_entry"
+        metadata["normalized_content"] = normalized_content
+        embedding_text = "\n".join(
+            filter(
+                None,
+                [
+                    normalized_content,
+                    metadata["goals_text"],
+                    ", ".join(metadata["people"]),
+                    ", ".join(metadata["projects"]),
+                    ", ".join(metadata["contexts"]),
+                    ", ".join(metadata["moods"]),
+                ],
+            )
+        )
+        return content, embedding_text, metadata
+
+    content = build_semantic_memory_summary(entry, extraction)
+    metadata["content_kind"] = "semantic_summary"
+    metadata["normalized_content"] = content
+    embedding_text = "\n".join(
+        filter(
+            None,
+            [
+                content,
+                normalized_content,
+                metadata["goals_text"],
+                ", ".join(metadata["canonical_entities"]),
+            ],
+        )
+    )
+    return content, embedding_text, metadata
+
+
 def call_json_api(
     method: str,
     url: str,
@@ -399,37 +714,39 @@ class WeaviateProjector:
 
     def ensure_schema(self) -> None:
         schema = call_json_api("GET", f"{self.base_url}/v1/schema")
-        classes = {item.get("class") for item in schema.get("classes", [])}
-        if VECTOR_CLASS_NAME in classes:
+        classes_by_name = {
+            str(item.get("class")): item for item in schema.get("classes", []) if item.get("class")
+        }
+        current_class = classes_by_name.get(VECTOR_CLASS_NAME)
+        if current_class is None:
+            call_json_api(
+                "POST",
+                f"{self.base_url}/v1/schema",
+                payload={
+                    "class": VECTOR_CLASS_NAME,
+                    "vectorizer": "none",
+                    "properties": WEAVIATE_CLASS_PROPERTIES,
+                },
+            )
             return
 
-        call_json_api(
-            "POST",
-            f"{self.base_url}/v1/schema",
-            payload={
-                "class": VECTOR_CLASS_NAME,
-                "vectorizer": "none",
-                "properties": [
-                    {"name": "user_id", "dataType": ["text"]},
-                    {"name": "source_record_id", "dataType": ["text"]},
-                    {"name": "source_record_type", "dataType": ["text"]},
-                    {"name": "projection_type", "dataType": ["text"]},
-                    {"name": "content", "dataType": ["text"]},
-                    {"name": "source", "dataType": ["text"]},
-                    {"name": "thread_id", "dataType": ["text"]},
-                    {"name": "goals_json", "dataType": ["text"]},
-                    {"name": "created_at", "dataType": ["text"]},
-                ],
-            },
-        )
+        existing_property_names = {
+            str(property_item.get("name"))
+            for property_item in current_class.get("properties", [])
+            if property_item.get("name")
+        }
+        for property_definition in WEAVIATE_CLASS_PROPERTIES:
+            if property_definition["name"] in existing_property_names:
+                continue
+            call_json_api(
+                "POST",
+                f"{self.base_url}/v1/schema/{VECTOR_CLASS_NAME}/properties",
+                payload=property_definition,
+            )
 
     def project(self, job: ProjectionJobRecord, entry: JournalEntryRecord) -> None:
         self.ensure_schema()
-        content = (
-            entry.journal_entry
-            if job.projection_type == "weaviate_journal_memory"
-            else build_episode_summary(entry)
-        )
+        content, embedding_text, properties = build_weaviate_projection_payload(job, entry)
         call_json_api(
             "POST",
             f"{self.base_url}/v1/objects",
@@ -437,17 +754,10 @@ class WeaviateProjector:
                 "class": VECTOR_CLASS_NAME,
                 "id": job.id,
                 "properties": {
-                    "user_id": entry.user_id,
-                    "source_record_id": entry.id,
-                    "source_record_type": job.source_record_type,
-                    "projection_type": job.projection_type,
+                    **properties,
                     "content": content,
-                    "source": entry.source,
-                    "thread_id": entry.thread_id or "",
-                    "goals_json": json.dumps(entry.goals),
-                    "created_at": entry.created_at.isoformat(),
                 },
-                "vector": embed_text(content),
+                "vector": embed_text(embedding_text),
             },
         )
 
@@ -608,10 +918,20 @@ def heuristic_extract_graph(entry: JournalEntryRecord) -> GraphExtraction:
         if re.search(rf"\b{re.escape(role)}\b", lowered):
             add_entity("person", role, 0.8, f"Mentioned person role '{role}'.")
 
-    for candidate in extract_phrase(r"\b(?:with|to|texted|called|argued with|talked to)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)", text):
-        add_entity("person", candidate, 0.76, f"Named person mention '{candidate}'.")
+    for candidate in extract_case_sensitive_phrase(
+        r"\b(?:with|to|texted|called|argued with|talked to|working with|met with|debriefed with)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)",
+        text,
+    ):
+        if is_valid_person_candidate(candidate):
+            add_entity("person", candidate, 0.82, f"Named person mention '{candidate}'.")
+    for candidate in extract_phrase(
+        r"\b(?:working with|met with|debriefed with|argued with|talked to|texted|called)\s+([a-z][a-z]+)\b",
+        lowered,
+    ):
+        if is_valid_person_candidate(candidate):
+            add_entity("person", candidate, 0.72, f"Contextual person mention '{candidate}'.")
     for candidate in re.findall(r"\b[A-Z][a-z]+\b", text):
-        if candidate not in {"I", *PERSON_STOPWORDS}:
+        if candidate not in {"I", *PERSON_STOPWORDS} and is_valid_person_candidate(candidate):
             add_entity("person", candidate, 0.58, f"Capitalized name candidate '{candidate}'.")
 
     for candidate in extract_phrase(r"\b(?:at|in|to)\s+the\s+([a-z][a-z\s]{2,30})", lowered):
@@ -619,8 +939,24 @@ def heuristic_extract_graph(entry: JournalEntryRecord) -> GraphExtraction:
             entity_type = "place" if candidate in PLACE_PATTERNS else "context"
             add_entity(entity_type, candidate, 0.64, f"Derived from location phrase '{candidate}'.")
 
-    for candidate in extract_phrase(r"\bworking on\s+([a-z0-9][a-z0-9\s-]{2,40})", lowered):
-        add_entity("project", candidate, 0.68, f"Derived from 'working on {candidate}'.")
+    for candidate in extract_phrase(
+        r"\bworking on\s+([a-z0-9][a-z0-9-]*(?:\s+(?!(?:with|because|after|before|and|but)\b)[a-z0-9][a-z0-9-]*){0,3})",
+        lowered,
+    ):
+        if is_valid_project_candidate(candidate):
+            add_entity("project", candidate, 0.68, f"Derived from 'working on {candidate}'.")
+    for candidate in extract_phrase(
+        r"(?:project|app|product)['\"]?\s+(?:refers?\s+to|is|was|called|named)\s+([a-z0-9][a-z0-9-]{1,30})",
+        lowered,
+    ):
+        if is_valid_project_candidate(candidate):
+            add_entity("project", candidate, 0.84, f"Derived from explicit project reference '{candidate}'.")
+    for candidate in extract_phrase(
+        r"(?:last project|current project|this project)['\"]?\s+(?:is|was|refers?\s+to|means|i'?m\s+referring\s+to|referring\s+to)\s+([a-z0-9][a-z0-9-]{1,30})",
+        lowered,
+    ):
+        if is_valid_project_candidate(candidate):
+            add_entity("project", candidate, 0.86, f"Derived from project alias reference '{candidate}'.")
 
     sentences = split_sentences(text)
     entities = list(entity_index.values())

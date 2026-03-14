@@ -1,5 +1,17 @@
-from midas.core.memory import MemoryMemoryStore, PROJECTION_TYPES
-from midas.core.projections import ExtractedEntity, GraphExtraction, GraphProjector, heuristic_extract_graph
+from midas.core.memory import (
+    MemoryMemoryStore,
+    PROJECTION_TYPES,
+    WEAVIATE_RAW_JOURNAL_PROJECTION,
+    WEAVIATE_SEMANTIC_SUMMARY_PROJECTION,
+)
+from midas.core.projections import (
+    ExtractedEntity,
+    GraphExtraction,
+    GraphProjector,
+    WEAVIATE_CLASS_PROPERTIES,
+    build_weaviate_projection_payload,
+    heuristic_extract_graph,
+)
 
 
 def test_memory_store_creates_entry_and_projection_jobs() -> None:
@@ -22,6 +34,122 @@ def test_memory_store_creates_entry_and_projection_jobs() -> None:
     assert {job.projection_type for job in jobs} == set(PROJECTION_TYPES)
     assert all(job.source_record_id == entry.id for job in jobs)
     assert all(job.status == "pending" for job in jobs)
+
+
+def test_weaviate_projection_payload_distinguishes_raw_and_semantic_content() -> None:
+    store = MemoryMemoryStore()
+    entry, jobs = store.create_journal_entry(
+        user_id="user-1",
+        journal_entry="I felt pretty pumped becasue the Midas setup is working and communicating clearly now.",
+        goals=["Ship Midas"],
+        thread_id="dashboard-chat",
+        steps=None,
+        sleep_hours=None,
+        hrv_ms=None,
+        source="reflection_api",
+    )
+    raw_job = next(job for job in jobs if job.projection_type == WEAVIATE_RAW_JOURNAL_PROJECTION)
+    semantic_job = next(job for job in jobs if job.projection_type == WEAVIATE_SEMANTIC_SUMMARY_PROJECTION)
+
+    raw_content, raw_embedding_text, raw_properties = build_weaviate_projection_payload(raw_job, entry)
+    semantic_content, semantic_embedding_text, semantic_properties = build_weaviate_projection_payload(semantic_job, entry)
+
+    assert raw_content == entry.journal_entry
+    assert raw_properties["content_kind"] == "raw_journal_entry"
+    assert raw_properties["goals"] == ["Ship Midas"]
+    assert raw_properties["projection_version"] == "v2"
+    assert "because" in raw_embedding_text
+    assert semantic_properties["content_kind"] == "semantic_summary"
+    assert semantic_content != entry.journal_entry
+    assert "Episode summary:" not in semantic_content
+    assert "Midas" in semantic_content
+    assert "because" in semantic_embedding_text
+    assert semantic_properties["goals"] == ["Ship Midas"]
+
+
+def test_weaviate_schema_uses_date_and_filterable_metadata_defaults() -> None:
+    properties_by_name = {item["name"]: item for item in WEAVIATE_CLASS_PROPERTIES}
+
+    assert properties_by_name["created_at"]["dataType"] == ["date"]
+    assert properties_by_name["created_at"]["indexFilterable"] is True
+    assert properties_by_name["user_id"]["indexSearchable"] is False
+    assert properties_by_name["source_record_id"]["indexSearchable"] is False
+    assert properties_by_name["projection_type"]["indexSearchable"] is False
+    assert properties_by_name["content"]["indexSearchable"] is True
+    assert properties_by_name["normalized_content"]["indexSearchable"] is True
+
+
+def test_weaviate_projection_payload_filters_bad_person_and_project_candidates() -> None:
+    store = MemoryMemoryStore()
+
+    ambiguous_entry, ambiguous_jobs = store.create_journal_entry(
+        user_id="user-1",
+        journal_entry="tofian is fun to hang with sometimes, and sometimes we have issues communicting",
+        goals=[],
+        thread_id="dashboard-chat",
+        steps=None,
+        sleep_hours=None,
+        hrv_ms=None,
+        source="reflection_api",
+    )
+    ambiguous_job = next(job for job in ambiguous_jobs if job.projection_type == WEAVIATE_SEMANTIC_SUMMARY_PROJECTION)
+    ambiguous_content, _embedding_text, ambiguous_properties = build_weaviate_projection_payload(ambiguous_job, ambiguous_entry)
+
+    assert ambiguous_properties["people"] == []
+    assert "hang_with" not in ambiguous_properties["canonical_entities"]
+    assert ambiguous_content.startswith("Journal note about")
+
+    torian_entry, torian_jobs = store.create_journal_entry(
+        user_id="user-1",
+        journal_entry="i'm feeling pretty great about how i got all of this working. it's funny though, when i was working with torian it took for fucking ever",
+        goals=[],
+        thread_id="dashboard-chat",
+        steps=None,
+        sleep_hours=None,
+        hrv_ms=None,
+        source="reflection_api",
+    )
+    torian_job = next(job for job in torian_jobs if job.projection_type == WEAVIATE_SEMANTIC_SUMMARY_PROJECTION)
+    torian_content, _embedding_text, torian_properties = build_weaviate_projection_payload(torian_job, torian_entry)
+
+    assert torian_properties["people"] == ["Torian"]
+    assert "torian_it" not in torian_properties["canonical_entities"]
+    assert "Torian It" not in torian_content
+
+    project_entry, project_jobs = store.create_journal_entry(
+        user_id="user-1",
+        journal_entry="i should mention that 'this project' refers to Midas. all of the recent entries i've done refer to that one and when i say the 'last project' i'm referring to thrivesight",
+        goals=[],
+        thread_id="dashboard-chat",
+        steps=None,
+        sleep_hours=None,
+        hrv_ms=None,
+        source="reflection_api",
+    )
+    project_job = next(job for job in project_jobs if job.projection_type == WEAVIATE_SEMANTIC_SUMMARY_PROJECTION)
+    project_content, _embedding_text, project_properties = build_weaviate_projection_payload(project_job, project_entry)
+
+    assert project_properties["people"] == []
+    assert set(project_properties["projects"]) >= {"midas", "thrivesight"}
+    assert set(project_properties["canonical_entities"]) >= {"midas", "thrivesight"}
+    assert "That One" not in project_content
+
+    local_entry, local_jobs = store.create_journal_entry(
+        user_id="user-1",
+        journal_entry="i'm feeling pretty pumped becasue this is set up and working on local now!",
+        goals=[],
+        thread_id="dashboard-chat",
+        steps=None,
+        sleep_hours=None,
+        hrv_ms=None,
+        source="reflection_api",
+    )
+    local_job = next(job for job in local_jobs if job.projection_type == WEAVIATE_SEMANTIC_SUMMARY_PROJECTION)
+    local_content, _embedding_text, local_properties = build_weaviate_projection_payload(local_job, local_entry)
+
+    assert local_properties["projects"] == []
+    assert "local_now" not in local_properties["canonical_entities"]
+    assert "Focus on local now" not in local_content
 
 
 def test_memory_store_filters_jobs_by_user_and_source_record() -> None:
