@@ -1130,7 +1130,10 @@ def normalize_extraction(entry: JournalEntryRecord, extraction: GraphExtraction)
             entity_type,
             entity.name or entity.canonical_name,
         )
-        display_name = normalize_free_text(entity.name.strip() or display_name_from_canonical(canonical_name))
+        display_name_source = entity.name.strip() or display_name_from_canonical(canonical_name)
+        if resolution_notes and resolution_notes.startswith("Applied user clarification"):
+            display_name_source = display_name_from_canonical(canonical_name)
+        display_name = normalize_free_text(display_name_source)
         entity_key = (entity_type, canonical_name)
         current = normalized_entities.get(entity_key)
         normalized_entity = ExtractedEntity(

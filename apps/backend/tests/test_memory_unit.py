@@ -1,4 +1,5 @@
 from midas.core.memory import (
+    AliasResolutionRecord,
     MemoryMemoryStore,
     PROJECTION_TYPES,
     WEAVIATE_RAW_JOURNAL_PROJECTION,
@@ -11,6 +12,7 @@ from midas.core.projections import (
     GraphProjector,
     WEAVIATE_CLASS_PROPERTIES,
     build_weaviate_projection_payload,
+    extract_graph,
     heuristic_extract_graph,
     normalize_extraction,
 )
@@ -153,6 +155,68 @@ def test_weaviate_projection_payload_filters_bad_person_and_project_candidates()
     assert local_properties["projects"] == []
     assert "local_now" not in local_properties["canonical_entities"]
     assert "Focus on local now" not in local_content
+
+
+def test_resolved_person_alias_updates_weaviate_people_and_summary(monkeypatch) -> None:
+    store = MemoryMemoryStore()
+    entry, jobs = store.create_journal_entry(
+        user_id="user-1",
+        journal_entry="tofian is fun to hang with sometimes, and sometimes we have issues communicting",
+        goals=[],
+        thread_id="dashboard-chat",
+        steps=None,
+        sleep_hours=None,
+        hrv_ms=None,
+        source="reflection_api",
+    )
+    semantic_job = next(job for job in jobs if job.projection_type == WEAVIATE_SEMANTIC_SUMMARY_PROJECTION)
+    raw_job = next(job for job in jobs if job.projection_type == WEAVIATE_RAW_JOURNAL_PROJECTION)
+
+    monkeypatch.setattr(
+        "midas.core.projections.get_alias_resolution_for_user",
+        lambda *, user_id, entity_type, raw_name: AliasResolutionRecord(
+            user_id=user_id,
+            entity_type=entity_type,
+            raw_name=raw_name.strip().lower(),
+            resolution="confirm_merge",
+            resolved_canonical_name="torian",
+            created_at=entry.created_at,
+            updated_at=entry.created_at,
+        )
+        if entity_type == "person" and raw_name.strip().lower() == "tofian"
+        else None,
+    )
+
+    extraction = GraphExtraction(
+        summary="interaction with tofian",
+        entities=[
+            ExtractedEntity(
+                entity_type="person",
+                name="Tofian",
+                canonical_name="tofian",
+                confidence=0.84,
+                evidence="Named person mention.",
+                aliases=["Tofian"],
+            )
+        ],
+        relationships=[],
+    )
+    normalized = normalize_extraction(entry, extraction)
+    assert any(
+        entity.entity_type == "person"
+        and entity.name.lower() == "torian"
+        and entity.canonical_name == "torian"
+        for entity in normalized.entities
+    )
+
+    semantic_content, _semantic_embedding_text, semantic_properties = build_weaviate_projection_payload(semantic_job, entry, extraction)
+    _raw_content, _raw_embedding_text, raw_properties = build_weaviate_projection_payload(raw_job, entry, extraction)
+
+    assert semantic_properties["people"] == ["Torian"]
+    assert raw_properties["people"] == ["Torian"]
+    assert semantic_properties["canonical_entities"] == ["torian"]
+    assert "Tofian" not in semantic_content
+    assert "Torian" in semantic_content
 
 
 def test_weaviate_projection_payload_uses_shared_model_extraction_for_organizations(monkeypatch) -> None:
