@@ -1,7 +1,11 @@
 from fastapi.testclient import TestClient
 
 from app.main import app
-from midas.core.memory import create_clarification_task_for_user
+from midas.core.memory import (
+    append_chat_message_for_user,
+    create_clarification_task_for_user,
+    ensure_chat_thread_for_user,
+)
 
 
 client = TestClient(app)
@@ -305,3 +309,66 @@ def test_clarification_resolution_reprojects_all_entries_with_same_raw_alias(mon
     assert resolve_response.json()["refresh_status"] == "refreshed"
     assert set(reprojected_entry_ids) == {first_entry["id"], second_entry["id"]}
     assert third_entry["id"] not in reprojected_entry_ids
+
+
+def test_clarification_resolution_falls_back_to_rewriting_saved_assistant_reply(monkeypatch) -> None:
+    monkeypatch.setattr("app.main.reproject_entry_artifacts", lambda entry, jobs: None)
+    monkeypatch.setattr(
+        "app.main.run_reflection_workflow",
+        lambda payload: (_ for _ in ()).throw(RuntimeError("LLM unavailable during refresh")),
+    )
+    access_token = register_user("clarification-fallback@example.com")
+
+    create_response = client.post(
+        "/v1/journal-entries",
+        json={
+            "journal_entry": "tofian is fun to hang with sometimes, and sometimes we have issues communicting",
+            "goals": [],
+            "thread_id": "clarification-fallback",
+        },
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert create_response.status_code == 200
+    entry = create_response.json()["entry"]
+
+    ensure_chat_thread_for_user(
+        user_id=entry["user_id"],
+        thread_id=entry["thread_id"],
+        title="Clarification fallback",
+    )
+    append_chat_message_for_user(
+        user_id=entry["user_id"],
+        thread_id=entry["thread_id"],
+        role="assistant",
+        content="- Torian is enjoyable company, but communication is inconsistent.",
+        source_record_id=entry["id"],
+    )
+
+    task = create_clarification_task_for_user(
+        user_id=entry["user_id"],
+        source_record_id=entry["id"],
+        entity_type="person",
+        raw_name="tofian",
+        candidate_canonical_name="torian",
+        prompt="Does 'tofian' refer to 'Torian' in this entry, or should it stay separate?",
+        options=["confirm_merge", "keep_separate", "dismiss"],
+        confidence=0.83,
+        evidence="'tofian' looks similar to existing person 'torian' and needs confirmation.",
+    )
+
+    resolve_response = client.post(
+        f"/v1/clarifications/{task.id}/resolve",
+        json={"resolution": "keep_separate"},
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert resolve_response.status_code == 200
+    assert "fallback rewrite" in resolve_response.json()["refresh_message"].lower()
+
+    thread_detail_response = client.get(
+        f"/v1/chat/threads/{entry['thread_id']}",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert thread_detail_response.status_code == 200
+    assert thread_detail_response.json()["messages"][-1]["content"] == (
+        "- tofian is enjoyable company, but communication is inconsistent."
+    )

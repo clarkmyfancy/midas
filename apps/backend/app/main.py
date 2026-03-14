@@ -279,6 +279,12 @@ def build_fallback_chat_title(text: str) -> str:
     return " ".join(words[:6]).rstrip(".,;:!?").title() or "New chat"
 
 
+def display_name_from_canonical(value: str | None) -> str:
+    if not value:
+        return ""
+    return value.replace("_", " ").strip().title()
+
+
 def generate_chat_thread_title(seed_text: str, assistant_text: str) -> str:
     if not os.getenv("OPENAI_API_KEY"):
         return build_fallback_chat_title(seed_text)
@@ -315,6 +321,58 @@ def build_reflection_request_for_entry(entry: JournalEntryResponse | object, *, 
         sleep_hours=getattr(entry, "sleep_hours"),
         hrv_ms=getattr(entry, "hrv_ms"),
     )
+
+
+def replace_whole_word(text: str, source: str, target: str) -> str:
+    if not source.strip() or not target.strip():
+        return text
+    pattern = re.compile(rf"(?<!\w){re.escape(source)}(?!\w)", re.IGNORECASE)
+    return pattern.sub(target, text)
+
+
+def fallback_refresh_assistant_reply(
+    *,
+    user_id: str,
+    source_entry,
+    task,
+) -> bool:
+    if not source_entry.thread_id:
+        return False
+    messages = list_chat_messages_for_user(user_id=user_id, thread_id=source_entry.thread_id)
+    assistant_message = next(
+        (
+            message
+            for message in reversed(messages)
+            if message.source_record_id == source_entry.id and message.role == "assistant"
+        ),
+        None,
+    )
+    if assistant_message is None:
+        return False
+
+    updated_content = assistant_message.content
+    raw_display = task.raw_name.strip()
+    candidate_display = display_name_from_canonical(task.candidate_canonical_name)
+    resolved_display = display_name_from_canonical(task.resolved_canonical_name or task.candidate_canonical_name)
+
+    if task.resolution == "confirm_merge":
+        updated_content = replace_whole_word(updated_content, raw_display, resolved_display)
+    elif task.resolution == "keep_separate":
+        updated_content = replace_whole_word(updated_content, candidate_display, raw_display)
+        updated_content = replace_whole_word(updated_content, resolved_display, raw_display)
+    else:
+        return False
+
+    if updated_content == assistant_message.content:
+        return False
+
+    replace_chat_message_for_user(
+        user_id=user_id,
+        source_record_id=source_entry.id,
+        role="assistant",
+        content=updated_content,
+    )
+    return True
 
 
 def find_entries_affected_by_clarification(user_id: str, task) -> list[object]:
@@ -508,10 +566,16 @@ def resolve_clarification(
             )
         except Exception:
             logger.exception("Assistant reply refresh failed for entry %s", source_entry.id)
-            refresh_status = "refreshed"
-            refresh_message = (
-                "Memory refreshed. Neo4j and Weaviate were updated, but the saved assistant reply could not be refreshed."
-            )
+            if fallback_refresh_assistant_reply(user_id=user.id, source_entry=source_entry, task=task):
+                refresh_status = "refreshed"
+                refresh_message = (
+                    "Memory refreshed. Neo4j and Weaviate were updated, and the stored assistant reply was updated with a fallback rewrite."
+                )
+            else:
+                refresh_status = "refreshed"
+                refresh_message = (
+                    "Memory refreshed. Neo4j and Weaviate were updated, but the saved assistant reply could not be refreshed."
+                )
     return serialize_clarification_task(
         task,
         refresh_status=refresh_status,
