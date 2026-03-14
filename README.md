@@ -102,142 +102,250 @@ sh .codex/skills/midas-publish-guard/scripts/run_publish_checks.sh
 
 The corresponding architectural decisions are documented in `docs/adr/011` through `docs/adr/015`.
 
-## Local Onboarding
+## Local Setup
 
-This section is the fastest way to get the full local site running and inspectable on a fresh machine.
+This section is the canonical guide for getting Midas running on a fresh machine.
 
-### 1. Prerequisites
+It is written for someone starting from scratch:
 
-Required:
+- you do not need a pre-existing database
+- you do not need a private cloud environment
+- you do not need anything from the original author’s computer
 
-- `uv`
+### What runs locally
+
+When Midas is running in local development, there are five main pieces:
+
+| Piece | Runs on | What it does |
+| --- | --- | --- |
+| Web app | `localhost:3000` | The UI for chatting with Midas, reviewing memory, and inspecting profile/data tools |
+| Backend API | `localhost:8000` | The FastAPI service that accepts journal/reflection requests and orchestrates memory updates |
+| Postgres | `localhost:5432` | The system of record for users, journal entries, chat threads, projection jobs, and clarification tasks |
+| Weaviate | `localhost:8080` | Vector memory storage used for searchable memory artifacts and summaries |
+| Neo4j | `localhost:7474` / `localhost:7687` | Graph memory storage used for people, projects, moods, and relationships between them |
+
+The normal flow is:
+
+1. You enter a reflection in the web UI.
+2. The backend stores the canonical entry in Postgres.
+3. Projection jobs derive vector artifacts in Weaviate and graph entities/relationships in Neo4j.
+4. The UI can inspect all of that state through the memory and review pages.
+
+### 1. Install prerequisites
+
+Required tools:
+
+- `git`
 - `pnpm`
+- `uv`
 - Python `3.13`
-- Docker Desktop or another running Docker daemon
+- Docker with Compose support
 
-Optional:
+You can use any package manager you prefer as long as those tools are installed and available on your shell path.
 
-- `xcodegen`
-- Xcode command line tools / full Xcode for the iOS app
+Minimum version expectations:
 
-On macOS with Homebrew:
+- Node capable of running the current `pnpm` workspace
+- Python `3.13`
+- Docker daemon running locally
+
+Sanity checks:
 
 ```bash
-brew install uv pnpm xcodegen
+git --version
+pnpm --version
+uv --version
+python3.13 --version
+docker info
+docker compose version
+```
+
+If `python3.13` is not installed yet, install it with `uv`:
+
+```bash
 uv python install 3.13
 ```
 
-### 2. Clone and install dependencies
+### 2. Clone the repository
+
+```bash
+git clone <your-fork-or-repo-url> midas
+cd midas
+```
+
+### 3. Install workspace dependencies
 
 From the repository root:
 
 ```bash
-cd /path/to/Midas
 pnpm install
 ```
 
-### 3. Create the backend environment file
+This installs the JavaScript and TypeScript dependencies for the monorepo. The backend Python dependencies are handled by `uv` when you run backend commands.
 
-Create `apps/backend/.env` from the checked-in example:
+### 4. Create the backend environment file
+
+The backend reads local configuration from `apps/backend/.env`.
+
+Create it from the checked-in example:
 
 ```bash
 cp apps/backend/.env.example apps/backend/.env
 ```
 
-The default local values in `apps/backend/.env.example` already point at the local Docker services.
+The default example is already configured for the local Docker services started by this repository.
 
 Important variables:
 
 - `OPENAI_API_KEY`
-  - Required if you want live reflection generation through the OpenAI-backed habit analyst.
-  - Without it, the memory projection system can still run, but live reflection/chat quality will be limited or fail where OpenAI is required.
+  - Needed for live LLM-backed reflection/chat behavior and model-based extraction.
+  - If this is missing, some behavior falls back to heuristics and some chat/reflection quality degrades.
+- `POSTGRES_URI`
+  - Tells the backend how to connect to the local Postgres container.
+- `WEAVIATE_URL`
+  - Tells the backend where the local Weaviate service lives.
+- `NEO4J_HTTP_URL`, `NEO4J_USERNAME`, `NEO4J_PASSWORD`
+  - Tells the backend how to write graph memory into Neo4j.
 - `MIDAS_AUTO_PROJECT`
-  - `1` means journal entries and reflection writes will automatically fan out into Weaviate and Neo4j in local dev.
-  - `0` means journal entries queue projection jobs and you run them manually from the Memory page.
-  - The checked-in local default is now `1`.
+  - `1` means every new reflection/journal entry will automatically project into Weaviate and Neo4j.
+  - `0` means entries are stored first and projection jobs must be run later.
 
-If you want live model responses, edit `apps/backend/.env` and set:
+If you want live model output, add your key:
 
 ```bash
 OPENAI_API_KEY="your_key_here"
 ```
 
-### 4. Start Docker Desktop
-
-Start Docker Desktop before trying to boot the memory services:
-
-```bash
-open -a "Docker"
-```
-
-Wait for Docker to finish starting, then confirm the daemon is healthy:
-
-```bash
-docker info
-```
-
 ### 5. Start the local data services
 
-From the repository root:
+Make sure Docker is running, then from the repository root run:
 
 ```bash
 pnpm memory:up
 ```
 
-This starts:
+This starts three containers:
 
-- Postgres on `localhost:5432`
-- Weaviate on `localhost:8080`
-- Neo4j on `localhost:7474` and `localhost:7687`
+- Postgres
+- Weaviate
+- Neo4j
 
-Neo4j local credentials:
+Default local Neo4j credentials:
 
 - Username: `neo4j`
 - Password: `midasdevpassword`
 
-### 6. Start the local site
+If you want to inspect the container definitions directly, they live in [docker-compose.yml](docker-compose.yml).
 
-From the repository root:
+### 6. Start the app
+
+From the repository root run:
 
 ```bash
 pnpm dev:site
 ```
 
-This runs:
+This starts:
 
-- FastAPI backend
-- Next.js web app
+- the FastAPI backend in `apps/backend`
+- the Next.js web app in `apps/web`
 
-`pnpm dev:site` also exports `MIDAS_AUTO_PROJECT=1` by default unless you explicitly override it before the command.
+By default, `pnpm dev:site` sets `MIDAS_AUTO_PROJECT=1`, so new entries automatically propagate into Weaviate and Neo4j unless you override that environment variable yourself.
 
 ### 7. Open the local surfaces
 
-Once the dev servers are up, open:
+Once the services are up, these URLs are the main local touch points:
 
 - Web app: `http://localhost:3000`
+- Reflect/chat page: `http://localhost:3000/reflect`
 - Memory inspector: `http://localhost:3000/memory`
+- Profile page: `http://localhost:3000/profile`
 - Backend OpenAPI docs: `http://127.0.0.1:8000/docs`
 - Neo4j Browser: `http://localhost:7474/browser/`
 - Weaviate schema: `http://localhost:8080/v1/schema`
 - Weaviate objects: `http://localhost:8080/v1/objects`
 
-### 8. First-run workflow
+### 8. First-run walkthrough
 
-After the app is running:
+If you want to confirm the whole stack is healthy:
 
 1. Open `http://localhost:3000/login`
-2. Register a local account
-3. Open `http://localhost:3000`
-4. If you want to inspect storage internals, open `http://localhost:3000/memory`
-5. Create a journal entry from the Memory page
-6. Watch the Memory page settle the projection jobs automatically
-7. If you need to retry failed jobs, use the `Run Projections` button
-8. If you want to test data cleanup, use `Delete Selected Entry`
-9. Inspect:
-   - canonical journal record
-   - queued/completed projection jobs
+2. Register a local user account
+3. Go to `http://localhost:3000/reflect`
+4. Send a short reflection or journal-style message
+5. Open `http://localhost:3000/memory`
+6. Confirm that you can see:
+   - the canonical journal entry in Postgres-backed state
+   - projection jobs
    - Weaviate artifacts
-   - Neo4j observation graph
+   - Neo4j graph output
+
+If `MIDAS_AUTO_PROJECT=0`, use the `Run Projections` control from the Memory page to process the queued jobs.
+
+### 9. What success looks like
+
+If local setup is working correctly:
+
+- the web app loads at `localhost:3000`
+- the backend docs load at `127.0.0.1:8000/docs`
+- submitting a reflection creates a journal entry
+- projection jobs move from pending to completed
+- Weaviate shows `MemoryArtifact` objects
+- Neo4j shows `Observation` and `Entity` nodes
+
+### 10. Common local tasks
+
+Generate shared TypeScript contracts after backend schema changes:
+
+```bash
+pnpm generate:types
+```
+
+Run the backend tests:
+
+```bash
+cd apps/backend
+UV_CACHE_DIR=/tmp/uv-cache uv run pytest
+```
+
+Run the web validation:
+
+```bash
+pnpm --filter @midas/web build
+pnpm --filter @midas/web typecheck
+```
+
+### 11. Troubleshooting
+
+If `pnpm memory:up` fails:
+
+- confirm Docker is running
+- confirm `docker info` works
+- confirm ports `5432`, `7474`, `7687`, and `8080` are not already occupied
+
+If the web app loads but reflections fail:
+
+- check that the backend is running on `127.0.0.1:8000`
+- check `apps/backend/.env`
+- if you expect LLM-backed output, check that `OPENAI_API_KEY` is set
+
+If entries appear in Postgres-backed views but not in Weaviate or Neo4j:
+
+- check whether `MIDAS_AUTO_PROJECT` is `0`
+- use the Memory page to run projection jobs manually
+- inspect backend logs for projection errors
+
+If you want to clear local memory data without deleting user accounts:
+
+- use the Profile page’s dev-only data wipe tools
+
+### 12. Package-specific docs
+
+If you only need one part of the system:
+
+- Backend details: [apps/backend/README.md](apps/backend/README.md)
+- Web details: [apps/web/README.md](apps/web/README.md)
+- iOS details: [apps/ios/README.md](apps/ios/README.md)
    - current memory mode (`Auto project: on|off`)
 
 ## Alternative Local Commands

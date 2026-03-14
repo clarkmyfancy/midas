@@ -1,26 +1,34 @@
 # Midas Backend
 
-FastAPI backend for the Midas multi-agent AI system.
+FastAPI backend for the Midas reflection, memory, and graph pipeline.
 
-## Key Concepts
+If you are starting from scratch, use the root onboarding guide first:
 
-- `app/`: FastAPI app, LangGraph workflow, schemas, and core agents
-- `midas/interfaces/`: public extension interfaces for open-core boundaries
-- `midas/core/registry.py`: singleton capability registry
-- `midas/core/loader.py`: optional `midas_pro` loader with Core fallbacks
-- `midas/core/entitlements.py`: mock Polar-style entitlement guard
-- `scripts/generate_types.py`: Pydantic-to-TypeScript generation for the monorepo
-- `tests/`: runtime and loader coverage
+- [../../README.md](../../README.md)
 
-## Runtime Notes
+That guide explains how the backend fits together with Postgres, Weaviate, Neo4j, and the web app.
 
-- The backend is pinned to Python `3.13` for compatibility with the current LangGraph and LangChain stack.
-- The service is expected to run in Core mode when `midas_pro` is not installed.
-- `GET /api/v1/capabilities` exposes the capability map used by the clients.
-- `GET /api/v1/pro/analytics` is guarded by `requires_entitlement("pro_analytics")`.
-- Open-core planning and boundary enforcement are documented in `docs/adr/007` and `docs/adr/011`.
+## What this app does
 
-## Getting Started
+The backend is the system coordinator. It:
+
+- accepts journal and reflection requests from the clients
+- stores canonical records in Postgres
+- runs the reflection workflow
+- creates and executes projection jobs for Weaviate and Neo4j
+- exposes the API contracts consumed by the web app
+
+## Important directories
+
+- `app/`: FastAPI routes, schemas, and agent workflow entrypoints
+- `midas/core/`: memory stores, projection logic, capability loading, entitlements
+- `midas/interfaces/`: public extension interfaces for the open-core boundary
+- `scripts/generate_types.py`: backend-to-TypeScript contract generation
+- `tests/`: backend test suite
+
+## Local backend-only startup
+
+From `apps/backend`:
 
 ```bash
 uv python install 3.13
@@ -28,13 +36,28 @@ uv sync --python 3.13
 uv run uvicorn app.main:app --reload
 ```
 
-## Generate Shared Types
+This assumes:
+
+- you already created `apps/backend/.env`
+- Postgres, Weaviate, and Neo4j are already running if you want the full memory pipeline
+
+## Useful backend endpoints
+
+- `GET /docs`: OpenAPI / Swagger UI
+- `GET /api/v1/capabilities`: capability map returned to clients
+- `POST /v1/reflections`: reflection/chat entrypoint
+- `GET /v1/clarifications`: pending clarification prompts
+- `POST /v1/projection-jobs/run`: manually run queued projection jobs
+
+## Generate shared types
+
+From `apps/backend`:
 
 ```bash
 uv run python scripts/generate_types.py
 ```
 
-Or from the monorepo root:
+From the repository root:
 
 ```bash
 pnpm generate:types
@@ -42,18 +65,14 @@ pnpm generate:types
 
 ## Test
 
+From `apps/backend`:
+
 ```bash
-uv run pytest
+UV_CACHE_DIR=/tmp/uv-cache uv run pytest
 ```
 
-From the repository root, the publish guard runs the same automated suite via:
+From the repository root, the publish guard runs the broader project checks:
 
 ```bash
 sh .codex/skills/midas-publish-guard/scripts/run_publish_checks.sh
-```
-
-## Smoke Check
-
-```bash
-uv run python -c "from fastapi.testclient import TestClient; from app.main import app; client = TestClient(app); print(client.get('/health').json()); print(client.get('/api/v1/capabilities').json())"
 ```
