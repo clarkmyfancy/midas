@@ -109,13 +109,36 @@ def test_heuristic_graph_extractor_merges_person_aliases_and_builds_relationship
     extraction = heuristic_extract_graph(entry)
 
     person_entities = [entity for entity in extraction.entities if entity.entity_type == "person"]
-    assert len(person_entities) == 2
-    assert {entity.canonical_name for entity in person_entities} >= {"josh", "joshua"}
+    assert len(person_entities) == 3
+    assert {entity.canonical_name for entity in person_entities} >= {"josh", "joshua", "self"}
     josh_entity = next(entity for entity in person_entities if entity.canonical_name == "josh")
     assert set(josh_entity.aliases) >= {"Josh"}
     assert josh_entity.needs_clarification is True
     assert josh_entity.candidate_canonical_name == "joshua"
     assert any(relationship.relationship_type in {"affected", "contributed_to", "led_up_to"} for relationship in extraction.relationships)
+
+
+def test_heuristic_graph_extractor_normalizes_first_person_to_self() -> None:
+    entry, _ = MemoryMemoryStore().create_journal_entry(
+        user_id="user-1",
+        journal_entry="I felt anxious after work and told myself to slow down.",
+        goals=[],
+        thread_id=None,
+        steps=None,
+        sleep_hours=None,
+        hrv_ms=None,
+        source="manual",
+    )
+
+    extraction = heuristic_extract_graph(entry)
+
+    self_entity = next(entity for entity in extraction.entities if entity.entity_type == "person")
+    assert self_entity.canonical_name == "self"
+    assert "I" in self_entity.aliases
+    assert any(
+        relationship.source_canonical_name == "self" and relationship.target_canonical_name == "anxious"
+        for relationship in extraction.relationships
+    )
 
 
 def test_clarification_resolution_guides_future_alias_handling() -> None:
@@ -198,3 +221,47 @@ def test_prepare_extraction_flags_typo_like_person_match_for_clarification(monke
     assert prepared.entities[0].needs_clarification is True
     assert prepared.entities[0].candidate_canonical_name == "torian"
     assert prepared.entities[0].confidence < 0.91
+
+
+def test_prepare_extraction_merges_current_user_aliases_without_clarification() -> None:
+    entry, _ = MemoryMemoryStore().create_journal_entry(
+        user_id="user-1",
+        journal_entry="I told myself to reset after work.",
+        goals=[],
+        thread_id=None,
+        steps=None,
+        sleep_hours=None,
+        hrv_ms=None,
+        source="manual",
+    )
+    projector = GraphProjector(base_url="http://127.0.0.1:7474")
+    extraction = GraphExtraction(
+        summary="person=self",
+        entities=[
+            ExtractedEntity(
+                entity_type="person",
+                name="I",
+                canonical_name="i",
+                confidence=0.87,
+                evidence="First-person reference.",
+                aliases=["I"],
+            ),
+            ExtractedEntity(
+                entity_type="person",
+                name="self",
+                canonical_name="self",
+                confidence=0.82,
+                evidence="Self-reference.",
+                aliases=["self"],
+            ),
+        ],
+        relationships=[],
+    )
+
+    prepared = projector.prepare_extraction(entry, extraction)
+
+    assert len(prepared.entities) == 1
+    assert prepared.entities[0].canonical_name == "self"
+    assert prepared.entities[0].name == "Self"
+    assert prepared.entities[0].needs_clarification is False
+    assert set(prepared.entities[0].aliases) >= {"I", "self"}

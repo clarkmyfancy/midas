@@ -129,6 +129,15 @@ PERSON_ALIAS_MAP = {
     "abby": "abigail",
     "abigail": "abigail",
 }
+CURRENT_USER_CANONICAL_NAME = "self"
+CURRENT_USER_REFERENCES = {
+    "i",
+    "me",
+    "my",
+    "mine",
+    "myself",
+    "self",
+}
 PERSON_STOPWORDS = {"After", "Before", "When", "While", "Because", "Later", "Then", "Today", "Yesterday"}
 KINSHIP_TITLES = {
     "brother",
@@ -227,6 +236,10 @@ def display_name_from_canonical(value: str) -> str:
     return value.replace("_", " ").strip() or value
 
 
+def is_current_user_reference(value: str) -> bool:
+    return normalize_name(value) in CURRENT_USER_REFERENCES
+
+
 def canonicalize_entity(
     user_id: str,
     entity_type: str,
@@ -234,6 +247,8 @@ def canonicalize_entity(
 ) -> tuple[str, list[str], bool, str | None, str | None]:
     cleaned = re.sub(r"\s+", " ", raw_name.strip())
     lowered = cleaned.lower()
+    if entity_type == "person" and is_current_user_reference(cleaned):
+        return CURRENT_USER_CANONICAL_NAME, [cleaned], False, None, None
     resolution = get_alias_resolution_for_user(
         user_id=user_id,
         entity_type=entity_type,
@@ -559,6 +574,9 @@ def heuristic_extract_graph(entry: JournalEntryRecord) -> GraphExtraction:
     for goal in entry.goals:
         add_entity("goal", goal, 0.96, "Derived from explicit goals payload.")
 
+    if re.search(r"\b(i|me|my|mine|myself)\b", lowered):
+        add_entity("person", "I", 0.95, "First-person reference in journal entry.")
+
     for role in KINSHIP_TITLES:
         if re.search(rf"\b{re.escape(role)}\b", lowered):
             add_entity("person", role, 0.8, f"Mentioned person role '{role}'.")
@@ -804,6 +822,25 @@ class GraphProjector:
                 candidate_canonical_name=None,
             )
 
+        if is_current_user_reference(entity.name) or is_current_user_reference(entity.canonical_name):
+            return ExtractedEntity(
+                entity_type=entity.entity_type,
+                name=display_name_from_canonical(CURRENT_USER_CANONICAL_NAME).title(),
+                canonical_name=CURRENT_USER_CANONICAL_NAME,
+                confidence=entity.confidence,
+                evidence=entity.evidence,
+                aliases=sorted(
+                    {
+                        alias.strip()
+                        for alias in [entity.name, *entity.aliases, entity.canonical_name]
+                        if alias.strip()
+                    }
+                ),
+                needs_clarification=False,
+                resolution_notes=entity.resolution_notes,
+                candidate_canonical_name=None,
+            )
+
         best_match: dict[str, Any] | None = None
         best_score = 0.0
         for candidate in existing_people:
@@ -848,34 +885,56 @@ class GraphProjector:
 
     def prepare_extraction(self, entry: JournalEntryRecord, extraction: GraphExtraction) -> GraphExtraction:
         existing_people = self.list_entities(entry.user_id, "person")
-        prepared_entities: list[ExtractedEntity] = []
+        prepared_entity_map: dict[tuple[str, str], ExtractedEntity] = {}
         canonical_name_map: dict[str, str] = {}
         for entity in extraction.entities:
             prepared = self._prepare_entity_for_storage(entry, entity, existing_people)
-            prepared_entities.append(prepared)
             canonical_name_map[entity.canonical_name] = prepared.canonical_name
-
-        prepared_relationships: list[ExtractedRelationship] = []
-        for relationship in extraction.relationships:
-            prepared_relationships.append(
-                ExtractedRelationship(
-                    source_canonical_name=canonical_name_map.get(
-                        relationship.source_canonical_name,
-                        relationship.source_canonical_name,
-                    ),
-                    target_canonical_name=canonical_name_map.get(
-                        relationship.target_canonical_name,
-                        relationship.target_canonical_name,
-                    ),
-                    relationship_type=relationship.relationship_type,
-                    confidence=relationship.confidence,
-                    evidence=relationship.evidence,
-                )
+            canonical_name_map[normalize_name(entity.name)] = prepared.canonical_name
+            entity_key = (prepared.entity_type, prepared.canonical_name)
+            current = prepared_entity_map.get(entity_key)
+            if current is None:
+                prepared_entity_map[entity_key] = prepared
+                continue
+            prepared_entity_map[entity_key] = ExtractedEntity(
+                entity_type=current.entity_type,
+                name=current.name if len(current.name) >= len(prepared.name) else prepared.name,
+                canonical_name=current.canonical_name,
+                confidence=max(current.confidence, prepared.confidence),
+                evidence=current.evidence if len(current.evidence) >= len(prepared.evidence) else prepared.evidence,
+                aliases=sorted({*current.aliases, *prepared.aliases}),
+                needs_clarification=current.needs_clarification or prepared.needs_clarification,
+                resolution_notes=current.resolution_notes or prepared.resolution_notes,
+                candidate_canonical_name=current.candidate_canonical_name or prepared.candidate_canonical_name,
             )
+
+        prepared_relationship_map: dict[tuple[str, str, str], ExtractedRelationship] = {}
+        for relationship in extraction.relationships:
+            prepared_relationship = ExtractedRelationship(
+                source_canonical_name=canonical_name_map.get(
+                    relationship.source_canonical_name,
+                    relationship.source_canonical_name,
+                ),
+                target_canonical_name=canonical_name_map.get(
+                    relationship.target_canonical_name,
+                    relationship.target_canonical_name,
+                ),
+                relationship_type=relationship.relationship_type,
+                confidence=relationship.confidence,
+                evidence=relationship.evidence,
+            )
+            relationship_key = (
+                prepared_relationship.source_canonical_name,
+                prepared_relationship.target_canonical_name,
+                prepared_relationship.relationship_type,
+            )
+            current = prepared_relationship_map.get(relationship_key)
+            if current is None or prepared_relationship.confidence > current.confidence:
+                prepared_relationship_map[relationship_key] = prepared_relationship
         return GraphExtraction(
             summary=extraction.summary,
-            entities=prepared_entities,
-            relationships=prepared_relationships,
+            entities=list(prepared_entity_map.values()),
+            relationships=list(prepared_relationship_map.values()),
         )
 
     def project(self, job: ProjectionJobRecord, entry: JournalEntryRecord) -> None:
