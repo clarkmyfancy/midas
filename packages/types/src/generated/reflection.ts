@@ -27,6 +27,34 @@ export interface CapabilityMapResponse {
   capabilities: Record<string, boolean>;
 }
 
+export interface ChatMessageResponse {
+  id: string;
+  thread_id: string;
+  role: string;
+  content: string;
+  source_record_id?: string | null;
+  created_at: string;
+}
+
+export interface ChatThreadDetailResponse {
+  thread: ChatThreadSummaryResponse;
+  messages: ChatMessageResponse[];
+}
+
+export interface ChatThreadListResponse {
+  threads: ChatThreadSummaryResponse[];
+}
+
+export interface ChatThreadSummaryResponse {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  last_message_at: string;
+  message_count: number;
+  last_message_preview?: string | null;
+}
+
 export interface ClarificationResolveRequest {
   resolution: string;
   resolved_canonical_name?: string | null;

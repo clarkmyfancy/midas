@@ -1,13 +1,16 @@
 import os
+import re
 from pathlib import Path
 from collections.abc import AsyncIterator
 from typing import Annotated
+from uuid import uuid4
 
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, Depends, FastAPI, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import HTTPException, status
 from fastapi.responses import StreamingResponse
+from langchain_openai import ChatOpenAI
 
 
 backend_env_dir = Path(__file__).resolve().parents[1]
@@ -15,7 +18,7 @@ load_dotenv(backend_env_dir / ".env")
 if os.getenv("MIDAS_LOAD_DOTENV_LOCAL", "1") != "0":
     load_dotenv(backend_env_dir / ".env.local", override=True)
 
-from app.agents.graph import astream_reflection_workflow
+from app.agents.graph import astream_reflection_workflow, run_reflection_workflow
 from app.schemas.auth import (
     AuthLoginRequest,
     AuthRegisterRequest,
@@ -23,6 +26,12 @@ from app.schemas.auth import (
     AuthUserResponse,
 )
 from app.schemas.capabilities import CapabilityMapResponse
+from app.schemas.chat import (
+    ChatMessageResponse,
+    ChatThreadDetailResponse,
+    ChatThreadListResponse,
+    ChatThreadSummaryResponse,
+)
 from app.schemas.journal import (
     ClarificationResolveRequest,
     ClarificationTaskListResponse,
@@ -60,16 +69,22 @@ from midas.core.entitlements import (
 )
 from midas.core.loader import load_capabilities
 from midas.core.memory import (
+    append_chat_message_for_user,
     create_journal_entry_for_user,
     delete_local_data,
     delete_journal_entry_for_user,
     delete_user_data_for_user,
+    ensure_chat_thread_for_user,
     list_clarification_tasks_for_user,
+    list_chat_messages_for_user,
+    list_chat_threads_for_user,
     get_journal_entry_for_user,
     init_memory_storage,
     list_journal_entries_for_user,
     list_projection_jobs_for_user,
+    replace_chat_message_for_user,
     resolve_clarification_task_for_user,
+    update_chat_thread_title_for_user,
 )
 from midas.core.projections import (
     GraphProjector,
@@ -135,6 +150,29 @@ def serialize_projection_job(job) -> ProjectionJobResponse:
         created_at=job.created_at,
         completed_at=job.completed_at,
         last_error=job.last_error,
+    )
+
+
+def serialize_chat_thread(thread) -> ChatThreadSummaryResponse:
+    return ChatThreadSummaryResponse(
+        id=thread.id,
+        title=thread.title,
+        created_at=thread.created_at,
+        updated_at=thread.updated_at,
+        last_message_at=thread.last_message_at,
+        message_count=thread.message_count,
+        last_message_preview=thread.last_message_preview,
+    )
+
+
+def serialize_chat_message(message) -> ChatMessageResponse:
+    return ChatMessageResponse(
+        id=message.id,
+        thread_id=message.thread_id,
+        role=message.role,
+        content=message.content,
+        source_record_id=message.source_record_id,
+        created_at=message.created_at,
     )
 
 
@@ -204,7 +242,65 @@ def serialize_review_stat(stat) -> ReviewStatResponse:
     return ReviewStatResponse(label=stat.label, value=stat.value)
 
 
-async def stream_reflection_events(payload: ReflectionRequest) -> AsyncIterator[str]:
+def render_reflection_text(findings: list[str], summary: str) -> str:
+    cleaned_findings = [finding.strip() for finding in findings if finding.strip()]
+    if cleaned_findings:
+        return "\n".join(f"- {finding}" for finding in cleaned_findings)
+    return summary.strip()
+
+
+def build_fallback_chat_title(text: str) -> str:
+    cleaned = re.sub(r"\s+", " ", text.strip())
+    words = cleaned.split()
+    if not words:
+        return "New chat"
+    return " ".join(words[:6]).rstrip(".,;:!?").title() or "New chat"
+
+
+def generate_chat_thread_title(seed_text: str, assistant_text: str) -> str:
+    if not os.getenv("OPENAI_API_KEY"):
+        return build_fallback_chat_title(seed_text)
+    response = ChatOpenAI(model="gpt-4o-mini", temperature=0).invoke(
+        "\n".join(
+            [
+                "Generate a concise chat title.",
+                "Use 2 to 6 words.",
+                "Do not use quotes or ending punctuation.",
+                "Capture the main subject of the conversation.",
+                f"User message: {seed_text}",
+                f"Assistant reply: {assistant_text}",
+            ]
+        )
+    )
+    content = response.content
+    if isinstance(content, list):
+        content = "".join(
+            item.get("text", "") if isinstance(item, dict) else str(item)
+            for item in content
+        )
+    if not isinstance(content, str):
+        return build_fallback_chat_title(seed_text)
+    normalized = re.sub(r"\s+", " ", content.strip()).strip("\"' ")
+    return normalized[:80] or build_fallback_chat_title(seed_text)
+
+
+def build_reflection_request_for_entry(entry: JournalEntryResponse | object, *, thread_id: str) -> ReflectionRequest:
+    return ReflectionRequest(
+        journal_entry=str(getattr(entry, "journal_entry")),
+        goals=list(getattr(entry, "goals")),
+        thread_id=thread_id,
+        steps=getattr(entry, "steps"),
+        sleep_hours=getattr(entry, "sleep_hours"),
+        hrv_ms=getattr(entry, "hrv_ms"),
+    )
+
+
+async def stream_reflection_events(
+    payload: ReflectionRequest,
+    *,
+    on_complete=None,
+) -> AsyncIterator[str]:
+    collected_tokens: list[str] = []
     async for chunk in astream_reflection_workflow(payload):
         if not isinstance(chunk, tuple) or len(chunk) != 2:
             continue
@@ -215,12 +311,40 @@ async def stream_reflection_events(payload: ReflectionRequest) -> AsyncIterator[
 
         token = payload_chunk.get("token")
         if isinstance(token, str) and token:
+            collected_tokens.append(token)
             yield f"data: {token}\n\n"
+    if on_complete is not None:
+        on_complete("".join(collected_tokens).strip())
 
 
 @app.get("/health")
 def healthcheck() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/api/v1/chat/threads", response_model=ChatThreadListResponse)
+@app.get("/v1/chat/threads", response_model=ChatThreadListResponse)
+def list_chat_threads(
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> ChatThreadListResponse:
+    threads = list_chat_threads_for_user(user.id)
+    return ChatThreadListResponse(threads=[serialize_chat_thread(thread) for thread in threads])
+
+
+@app.get("/api/v1/chat/threads/{thread_id}", response_model=ChatThreadDetailResponse)
+@app.get("/v1/chat/threads/{thread_id}", response_model=ChatThreadDetailResponse)
+def get_chat_thread(
+    thread_id: str,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> ChatThreadDetailResponse:
+    thread = next((item for item in list_chat_threads_for_user(user.id) if item.id == thread_id), None)
+    if thread is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat thread not found")
+    messages = list_chat_messages_for_user(user_id=user.id, thread_id=thread_id)
+    return ChatThreadDetailResponse(
+        thread=serialize_chat_thread(thread),
+        messages=[serialize_chat_message(message) for message in messages],
+    )
 
 
 @app.get("/api/v1/memory/settings", response_model=MemorySettingsResponse)
@@ -303,6 +427,19 @@ def resolve_clarification(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="Clarification was saved, but derived memory stores could not be refreshed.",
             ) from exc
+        if entry.thread_id:
+            reflection = run_reflection_workflow(
+                build_reflection_request_for_entry(
+                    entry,
+                    thread_id=f"user:{user.id}:{entry.thread_id}",
+                )
+            )
+            replace_chat_message_for_user(
+                user_id=user.id,
+                source_record_id=entry.id,
+                role="assistant",
+                content=render_reflection_text(reflection.findings, reflection.summary),
+            )
     return serialize_clarification_task(task)
 
 
@@ -313,24 +450,57 @@ async def create_reflection(
     payload: ReflectionRequest,
     user: Annotated[AuthUser, Depends(get_current_user)],
 ) -> StreamingResponse:
+    thread_id = payload.thread_id or str(uuid4())
     stored_entry, _ = create_journal_entry_for_user(
         user_id=user.id,
         journal_entry=payload.journal_entry,
         goals=payload.goals,
-        thread_id=payload.thread_id,
+        thread_id=thread_id,
         steps=payload.steps,
         sleep_hours=payload.sleep_hours,
         hrv_ms=payload.hrv_ms,
         source="reflection_api",
     )
-    thread_suffix = payload.thread_id or stored_entry.id
-    resolved_payload = payload.model_copy(
-        update={"thread_id": f"user:{user.id}:{thread_suffix}"}
+    thread = ensure_chat_thread_for_user(
+        user_id=user.id,
+        thread_id=thread_id,
+        title="New chat",
+        created_at=stored_entry.created_at,
+        last_message_at=stored_entry.created_at,
     )
+    append_chat_message_for_user(
+        user_id=user.id,
+        thread_id=thread_id,
+        role="user",
+        content=payload.journal_entry,
+        source_record_id=stored_entry.id,
+        created_at=stored_entry.created_at,
+    )
+    resolved_payload = payload.model_copy(
+        update={"thread_id": f"user:{user.id}:{thread_id}"}
+    )
+    def persist_assistant_reply(assistant_text: str) -> None:
+        assistant_content = assistant_text
+        if not assistant_content:
+            reflection = run_reflection_workflow(resolved_payload)
+            assistant_content = render_reflection_text(reflection.findings, reflection.summary)
+        append_chat_message_for_user(
+            user_id=user.id,
+            thread_id=thread_id,
+            role="assistant",
+            content=assistant_content,
+            source_record_id=stored_entry.id,
+        )
+        if thread.title == "New chat":
+            update_chat_thread_title_for_user(
+                user_id=user.id,
+                thread_id=thread_id,
+                title=generate_chat_thread_title(payload.journal_entry, assistant_content),
+            )
     if os.getenv("MIDAS_AUTO_PROJECT", "0") == "1":
         process_pending_projection_jobs(limit=10, user_id=user.id)
     return StreamingResponse(
-        stream_reflection_events(resolved_payload),
+        stream_reflection_events(resolved_payload, on_complete=persist_assistant_reply),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache"},
         background=background_tasks,

@@ -7,6 +7,12 @@ from app.schemas.auth import (
     AuthUserResponse,
 )
 from app.schemas.capabilities import CapabilityMapResponse
+from app.schemas.chat import (
+    ChatMessageResponse,
+    ChatThreadDetailResponse,
+    ChatThreadListResponse,
+    ChatThreadSummaryResponse,
+)
 from app.schemas.journal import (
     ClarificationResolveRequest,
     ClarificationTaskListResponse,
@@ -40,6 +46,10 @@ SCHEMA_MODELS = [
     AuthLoginRequest,
     AuthUserResponse,
     AuthTokenResponse,
+    ChatMessageResponse,
+    ChatThreadSummaryResponse,
+    ChatThreadListResponse,
+    ChatThreadDetailResponse,
     ClarificationTaskResponse,
     ClarificationTaskListResponse,
     ClarificationResolveRequest,
@@ -71,6 +81,10 @@ __all__ = [
     "AuthTokenResponse",
     "AuthUserResponse",
     "CapabilityMapResponse",
+    "ChatMessageResponse",
+    "ChatThreadSummaryResponse",
+    "ChatThreadListResponse",
+    "ChatThreadDetailResponse",
     "ClarificationResolveRequest",
     "ClarificationTaskListResponse",
     "ClarificationTaskResponse",

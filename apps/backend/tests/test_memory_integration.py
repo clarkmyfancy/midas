@@ -75,6 +75,26 @@ def test_reflection_endpoint_persists_canonical_journal_entry() -> None:
     assert jobs_response.status_code == 200
     assert len(jobs_response.json()["projection_jobs"]) == 3
 
+    threads_response = client.get(
+        "/v1/chat/threads",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert threads_response.status_code == 200
+    threads = threads_response.json()["threads"]
+    assert len(threads) == 1
+    assert threads[0]["title"]
+    assert threads[0]["message_count"] == 2
+
+    thread_detail_response = client.get(
+        f"/v1/chat/threads/{threads[0]['id']}",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert thread_detail_response.status_code == 200
+    assert [message["role"] for message in thread_detail_response.json()["messages"]] == [
+        "user",
+        "assistant",
+    ]
+
 
 def test_delete_endpoint_removes_canonical_entry() -> None:
     access_token = register_user("delete-integration@example.com")
@@ -108,14 +128,24 @@ def test_delete_endpoint_removes_canonical_entry() -> None:
 
 def test_clarification_resolution_round_trip(monkeypatch) -> None:
     monkeypatch.setattr("app.main.reproject_entry_artifacts", lambda entry, jobs: None)
+    monkeypatch.setattr(
+        "app.main.run_reflection_workflow",
+        lambda payload: type(
+            "Response",
+            (),
+            {"findings": ["Corrected reply after alias resolution."], "summary": "Corrected reply after alias resolution."},
+        )(),
+    )
     access_token = register_user("clarification-integration@example.com")
 
-    create_response = client.post(
-        "/v1/journal-entries",
-        json={"journal_entry": "Josh joined me after the presentation.", "goals": []},
+    with client.stream(
+        "POST",
+        "/v1/reflections",
+        json={"journal_entry": "Josh joined me after the presentation.", "goals": [], "thread_id": "clarification-thread"},
         headers={"Authorization": f"Bearer {access_token}"},
-    )
-    assert create_response.status_code == 200
+    ) as create_response:
+        assert create_response.status_code == 200
+        _ = "".join(create_response.iter_text())
 
     run_response = client.post(
         "/v1/projection-jobs/run?limit=10",
@@ -145,3 +175,16 @@ def test_clarification_resolution_round_trip(monkeypatch) -> None:
     )
     assert resolved_list_response.status_code == 200
     assert resolved_list_response.json()["tasks"][0]["id"] == task["id"]
+
+    threads_response = client.get(
+        "/v1/chat/threads",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert threads_response.status_code == 200
+    thread_id = threads_response.json()["threads"][0]["id"]
+    thread_detail_response = client.get(
+        f"/v1/chat/threads/{thread_id}",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert thread_detail_response.status_code == 200
+    assert thread_detail_response.json()["messages"][-1]["content"] == "- Corrected reply after alias resolution."

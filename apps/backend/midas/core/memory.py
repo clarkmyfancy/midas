@@ -88,6 +88,29 @@ class AliasResolutionRecord:
 
 
 @dataclass(frozen=True)
+class ChatThreadRecord:
+    id: str
+    user_id: str
+    title: str
+    created_at: datetime
+    updated_at: datetime
+    last_message_at: datetime
+    message_count: int
+    last_message_preview: str | None
+
+
+@dataclass(frozen=True)
+class ChatMessageRecord:
+    id: str
+    thread_id: str
+    user_id: str
+    role: str
+    content: str
+    source_record_id: str | None
+    created_at: datetime
+
+
+@dataclass(frozen=True)
 class UserDataDeleteResult:
     deleted_entry_ids: list[str]
     deleted_projection_job_ids: list[str]
@@ -204,6 +227,59 @@ class MemoryStore:
     ) -> AliasResolutionRecord | None:
         raise NotImplementedError
 
+    def ensure_chat_thread(
+        self,
+        *,
+        user_id: str,
+        thread_id: str,
+        title: str,
+        created_at: datetime | None = None,
+        last_message_at: datetime | None = None,
+    ) -> ChatThreadRecord:
+        raise NotImplementedError
+
+    def update_chat_thread_title(
+        self,
+        *,
+        user_id: str,
+        thread_id: str,
+        title: str,
+    ) -> ChatThreadRecord:
+        raise NotImplementedError
+
+    def list_chat_threads(self, user_id: str) -> list[ChatThreadRecord]:
+        raise NotImplementedError
+
+    def append_chat_message(
+        self,
+        *,
+        user_id: str,
+        thread_id: str,
+        role: str,
+        content: str,
+        source_record_id: str | None,
+        created_at: datetime | None = None,
+    ) -> ChatMessageRecord:
+        raise NotImplementedError
+
+    def list_chat_messages(
+        self,
+        *,
+        user_id: str,
+        thread_id: str,
+    ) -> list[ChatMessageRecord]:
+        raise NotImplementedError
+
+    def replace_chat_message(
+        self,
+        *,
+        user_id: str,
+        source_record_id: str,
+        role: str,
+        content: str,
+    ) -> ChatMessageRecord | None:
+        raise NotImplementedError
+
 
 class MemoryMemoryStore(MemoryStore):
     def __init__(self) -> None:
@@ -215,6 +291,10 @@ class MemoryMemoryStore(MemoryStore):
         self._clarification_tasks_by_id: dict[str, ClarificationTaskRecord] = {}
         self._clarification_task_ids_by_user: dict[str, list[str]] = {}
         self._alias_resolution_by_key: dict[tuple[str, str, str], AliasResolutionRecord] = {}
+        self._chat_threads_by_id: dict[str, ChatThreadRecord] = {}
+        self._chat_thread_ids_by_user: dict[str, list[str]] = {}
+        self._chat_messages_by_id: dict[str, ChatMessageRecord] = {}
+        self._chat_message_ids_by_thread: dict[str, list[str]] = {}
 
     def setup(self) -> None:
         return None
@@ -314,6 +394,29 @@ class MemoryMemoryStore(MemoryStore):
                 for job_id in self._job_ids_by_user.get(user_id, [])
                 if job_id not in {job.id for job in jobs}
             ]
+            thread_id = entry.thread_id
+            chat_message_ids = [
+                message_id
+                for message_id, message in list(self._chat_messages_by_id.items())
+                if message.user_id == user_id and message.source_record_id == entry_id
+            ]
+            for message_id in chat_message_ids:
+                message = self._chat_messages_by_id.pop(message_id, None)
+                if message is None:
+                    continue
+                self._chat_message_ids_by_thread[message.thread_id] = [
+                    current_message_id
+                    for current_message_id in self._chat_message_ids_by_thread.get(message.thread_id, [])
+                    if current_message_id != message_id
+                ]
+            if thread_id and not self._chat_message_ids_by_thread.get(thread_id):
+                self._chat_message_ids_by_thread.pop(thread_id, None)
+                self._chat_threads_by_id.pop(thread_id, None)
+                self._chat_thread_ids_by_user[user_id] = [
+                    current_thread_id
+                    for current_thread_id in self._chat_thread_ids_by_user.get(user_id, [])
+                    if current_thread_id != thread_id
+                ]
 
         return entry, jobs
 
@@ -358,10 +461,17 @@ class MemoryMemoryStore(MemoryStore):
                 self._clarification_tasks_by_id.pop(task_id, None)
             for key in alias_resolution_keys:
                 self._alias_resolution_by_key.pop(key, None)
+            chat_thread_ids = list(self._chat_thread_ids_by_user.get(user_id, []))
+            for thread_id in chat_thread_ids:
+                self._chat_threads_by_id.pop(thread_id, None)
+                for message_id in self._chat_message_ids_by_thread.get(thread_id, []):
+                    self._chat_messages_by_id.pop(message_id, None)
+                self._chat_message_ids_by_thread.pop(thread_id, None)
 
             self._entry_ids_by_user.pop(user_id, None)
             self._job_ids_by_user.pop(user_id, None)
             self._clarification_task_ids_by_user.pop(user_id, None)
+            self._chat_thread_ids_by_user.pop(user_id, None)
 
         return UserDataDeleteResult(
             deleted_entry_ids=entry_ids,
@@ -395,6 +505,10 @@ class MemoryMemoryStore(MemoryStore):
             self._clarification_tasks_by_id.clear()
             self._clarification_task_ids_by_user.clear()
             self._alias_resolution_by_key.clear()
+            self._chat_threads_by_id.clear()
+            self._chat_thread_ids_by_user.clear()
+            self._chat_messages_by_id.clear()
+            self._chat_message_ids_by_thread.clear()
 
         return LocalDataDeleteResult(
             deleted_entry_ids=[entry.id for entry in entries],
@@ -427,6 +541,189 @@ class MemoryMemoryStore(MemoryStore):
             self._clarification_tasks_by_id.clear()
             self._clarification_task_ids_by_user.clear()
             self._alias_resolution_by_key.clear()
+            self._chat_threads_by_id.clear()
+            self._chat_thread_ids_by_user.clear()
+            self._chat_messages_by_id.clear()
+            self._chat_message_ids_by_thread.clear()
+
+    def ensure_chat_thread(
+        self,
+        *,
+        user_id: str,
+        thread_id: str,
+        title: str,
+        created_at: datetime | None = None,
+        last_message_at: datetime | None = None,
+    ) -> ChatThreadRecord:
+        timestamp = created_at or datetime.now(UTC)
+        last_timestamp = last_message_at or timestamp
+        with self._lock:
+            current = self._chat_threads_by_id.get(thread_id)
+            if current is None:
+                thread = ChatThreadRecord(
+                    id=thread_id,
+                    user_id=user_id,
+                    title=title,
+                    created_at=timestamp,
+                    updated_at=timestamp,
+                    last_message_at=last_timestamp,
+                    message_count=0,
+                    last_message_preview=None,
+                )
+                self._chat_threads_by_id[thread_id] = thread
+                self._chat_thread_ids_by_user.setdefault(user_id, []).append(thread_id)
+                self._chat_message_ids_by_thread.setdefault(thread_id, [])
+                return thread
+            updated = ChatThreadRecord(
+                id=current.id,
+                user_id=current.user_id,
+                title=current.title or title,
+                created_at=current.created_at,
+                updated_at=max(current.updated_at, timestamp),
+                last_message_at=max(current.last_message_at, last_timestamp),
+                message_count=current.message_count,
+                last_message_preview=current.last_message_preview,
+            )
+            self._chat_threads_by_id[thread_id] = updated
+            return updated
+
+    def update_chat_thread_title(
+        self,
+        *,
+        user_id: str,
+        thread_id: str,
+        title: str,
+    ) -> ChatThreadRecord:
+        with self._lock:
+            current = self._chat_threads_by_id.get(thread_id)
+            if current is None or current.user_id != user_id:
+                raise KeyError(thread_id)
+            updated = ChatThreadRecord(
+                id=current.id,
+                user_id=current.user_id,
+                title=title,
+                created_at=current.created_at,
+                updated_at=datetime.now(UTC),
+                last_message_at=current.last_message_at,
+                message_count=current.message_count,
+                last_message_preview=current.last_message_preview,
+            )
+            self._chat_threads_by_id[thread_id] = updated
+            return updated
+
+    def list_chat_threads(self, user_id: str) -> list[ChatThreadRecord]:
+        with self._lock:
+            thread_ids = list(self._chat_thread_ids_by_user.get(user_id, []))
+            threads = [self._chat_threads_by_id[thread_id] for thread_id in thread_ids if thread_id in self._chat_threads_by_id]
+        return sorted(threads, key=lambda item: (item.last_message_at, item.updated_at), reverse=True)
+
+    def append_chat_message(
+        self,
+        *,
+        user_id: str,
+        thread_id: str,
+        role: str,
+        content: str,
+        source_record_id: str | None,
+        created_at: datetime | None = None,
+    ) -> ChatMessageRecord:
+        timestamp = created_at or datetime.now(UTC)
+        preview = " ".join(content.split())[:160] or None
+        with self._lock:
+            current_thread = self._chat_threads_by_id.get(thread_id)
+            if current_thread is None or current_thread.user_id != user_id:
+                raise KeyError(thread_id)
+            message = ChatMessageRecord(
+                id=str(uuid4()),
+                thread_id=thread_id,
+                user_id=user_id,
+                role=role,
+                content=content,
+                source_record_id=source_record_id,
+                created_at=timestamp,
+            )
+            self._chat_messages_by_id[message.id] = message
+            self._chat_message_ids_by_thread.setdefault(thread_id, []).append(message.id)
+            updated_thread = ChatThreadRecord(
+                id=current_thread.id,
+                user_id=current_thread.user_id,
+                title=current_thread.title,
+                created_at=current_thread.created_at,
+                updated_at=timestamp,
+                last_message_at=timestamp,
+                message_count=current_thread.message_count + 1,
+                last_message_preview=preview,
+            )
+            self._chat_threads_by_id[thread_id] = updated_thread
+            return message
+
+    def list_chat_messages(
+        self,
+        *,
+        user_id: str,
+        thread_id: str,
+    ) -> list[ChatMessageRecord]:
+        with self._lock:
+            thread = self._chat_threads_by_id.get(thread_id)
+            if thread is None or thread.user_id != user_id:
+                return []
+            message_ids = list(self._chat_message_ids_by_thread.get(thread_id, []))
+            messages = [self._chat_messages_by_id[message_id] for message_id in message_ids if message_id in self._chat_messages_by_id]
+        return sorted(messages, key=lambda item: item.created_at)
+
+    def replace_chat_message(
+        self,
+        *,
+        user_id: str,
+        source_record_id: str,
+        role: str,
+        content: str,
+    ) -> ChatMessageRecord | None:
+        preview = " ".join(content.split())[:160] or None
+        with self._lock:
+            current_message: ChatMessageRecord | None = None
+            for message in self._chat_messages_by_id.values():
+                if (
+                    message.user_id == user_id
+                    and message.source_record_id == source_record_id
+                    and message.role == role
+                ):
+                    current_message = message
+                    break
+            if current_message is None:
+                return None
+            updated_message = ChatMessageRecord(
+                id=current_message.id,
+                thread_id=current_message.thread_id,
+                user_id=current_message.user_id,
+                role=current_message.role,
+                content=content,
+                source_record_id=current_message.source_record_id,
+                created_at=current_message.created_at,
+            )
+            self._chat_messages_by_id[current_message.id] = updated_message
+            current_thread = self._chat_threads_by_id.get(current_message.thread_id)
+            if current_thread is not None:
+                latest_message = sorted(
+                    (
+                        self._chat_messages_by_id[message_id]
+                        for message_id in self._chat_message_ids_by_thread.get(current_message.thread_id, [])
+                        if message_id in self._chat_messages_by_id
+                    ),
+                    key=lambda item: item.created_at,
+                )[-1]
+                updated_thread = ChatThreadRecord(
+                    id=current_thread.id,
+                    user_id=current_thread.user_id,
+                    title=current_thread.title,
+                    created_at=current_thread.created_at,
+                    updated_at=datetime.now(UTC),
+                    last_message_at=current_thread.last_message_at,
+                    message_count=current_thread.message_count,
+                    last_message_preview=" ".join(latest_message.content.split())[:160] or None,
+                )
+                self._chat_threads_by_id[current_message.thread_id] = updated_thread
+            return updated_message
 
     def list_pending_projection_jobs(
         self,
@@ -713,6 +1010,49 @@ class PostgresMemoryStore(MemoryStore):
                 )
                 """
             )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS chat_threads (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL,
+                    updated_at TIMESTAMPTZ NOT NULL,
+                    last_message_at TIMESTAMPTZ NOT NULL
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_chat_threads_user_last_message_at
+                ON chat_threads (user_id, last_message_at DESC)
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS chat_messages (
+                    id TEXT PRIMARY KEY,
+                    thread_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    source_record_id TEXT,
+                    created_at TIMESTAMPTZ NOT NULL
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_chat_messages_thread_created_at
+                ON chat_messages (thread_id, created_at ASC)
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_chat_messages_user_source_role
+                ON chat_messages (user_id, source_record_id, role)
+                """
+            )
             conn.commit()
 
     def create_journal_entry(
@@ -869,6 +1209,25 @@ class PostgresMemoryStore(MemoryStore):
             )
             cur.execute(
                 """
+                DELETE FROM chat_messages
+                WHERE user_id = %s AND source_record_id = %s
+                """,
+                (user_id, entry_id),
+            )
+            if self._build_entry(entry_row).thread_id:
+                cur.execute(
+                    """
+                    DELETE FROM chat_threads
+                    WHERE id = %s AND user_id = %s
+                      AND NOT EXISTS (
+                          SELECT 1 FROM chat_messages
+                          WHERE chat_messages.thread_id = chat_threads.id
+                      )
+                    """,
+                    (self._build_entry(entry_row).thread_id, user_id),
+                )
+            cur.execute(
+                """
                 DELETE FROM journal_entries
                 WHERE id = %s AND user_id = %s
                 """,
@@ -939,6 +1298,20 @@ class PostgresMemoryStore(MemoryStore):
             )
             cur.execute(
                 """
+                DELETE FROM chat_messages
+                WHERE user_id = %s
+                """,
+                (user_id,),
+            )
+            cur.execute(
+                """
+                DELETE FROM chat_threads
+                WHERE user_id = %s
+                """,
+                (user_id,),
+            )
+            cur.execute(
+                """
                 DELETE FROM memory_projection_jobs
                 WHERE user_id = %s
                 """,
@@ -994,6 +1367,8 @@ class PostgresMemoryStore(MemoryStore):
 
             cur.execute("DELETE FROM alias_resolutions")
             cur.execute("DELETE FROM clarification_tasks")
+            cur.execute("DELETE FROM chat_messages")
+            cur.execute("DELETE FROM chat_threads")
             cur.execute("DELETE FROM memory_projection_jobs")
             cur.execute("DELETE FROM journal_entries")
             conn.commit()
@@ -1085,6 +1460,29 @@ class PostgresMemoryStore(MemoryStore):
             resolved_canonical_name=row[4],
             created_at=row[5],
             updated_at=row[6],
+        )
+
+    def _build_chat_thread(self, row: tuple[object, ...]) -> ChatThreadRecord:
+        return ChatThreadRecord(
+            id=row[0],
+            user_id=row[1],
+            title=row[2],
+            created_at=row[3],
+            updated_at=row[4],
+            last_message_at=row[5],
+            message_count=int(row[6]),
+            last_message_preview=row[7],
+        )
+
+    def _build_chat_message(self, row: tuple[object, ...]) -> ChatMessageRecord:
+        return ChatMessageRecord(
+            id=row[0],
+            thread_id=row[1],
+            user_id=row[2],
+            role=row[3],
+            content=row[4],
+            source_record_id=row[5],
+            created_at=row[6],
         )
 
     def list_pending_projection_jobs(
@@ -1337,6 +1735,244 @@ class PostgresMemoryStore(MemoryStore):
             return None
         return self._build_alias_resolution(row)
 
+    def ensure_chat_thread(
+        self,
+        *,
+        user_id: str,
+        thread_id: str,
+        title: str,
+        created_at: datetime | None = None,
+        last_message_at: datetime | None = None,
+    ) -> ChatThreadRecord:
+        created_timestamp = created_at or datetime.now(UTC)
+        last_timestamp = last_message_at or created_timestamp
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO chat_threads (
+                    id, user_id, title, created_at, updated_at, last_message_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (id)
+                DO UPDATE SET
+                    updated_at = GREATEST(chat_threads.updated_at, EXCLUDED.updated_at),
+                    last_message_at = GREATEST(chat_threads.last_message_at, EXCLUDED.last_message_at)
+                RETURNING
+                    id,
+                    user_id,
+                    title,
+                    created_at,
+                    updated_at,
+                    last_message_at,
+                    0 AS message_count,
+                    NULL::TEXT AS last_message_preview
+                """,
+                (thread_id, user_id, title, created_timestamp, created_timestamp, last_timestamp),
+            )
+            row = cur.fetchone()
+            conn.commit()
+        return self._build_chat_thread(row)
+
+    def update_chat_thread_title(
+        self,
+        *,
+        user_id: str,
+        thread_id: str,
+        title: str,
+    ) -> ChatThreadRecord:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                WITH thread_stats AS (
+                    SELECT
+                        thread_id,
+                        COUNT(*)::INTEGER AS message_count,
+                        (
+                            ARRAY_AGG(LEFT(content, 160) ORDER BY created_at DESC)
+                        )[1] AS last_message_preview
+                    FROM chat_messages
+                    WHERE thread_id = %s
+                    GROUP BY thread_id
+                )
+                UPDATE chat_threads
+                SET title = %s,
+                    updated_at = %s
+                FROM thread_stats
+                WHERE chat_threads.id = %s
+                  AND chat_threads.user_id = %s
+                RETURNING
+                    chat_threads.id,
+                    chat_threads.user_id,
+                    chat_threads.title,
+                    chat_threads.created_at,
+                    chat_threads.updated_at,
+                    chat_threads.last_message_at,
+                    COALESCE(thread_stats.message_count, 0),
+                    thread_stats.last_message_preview
+                """,
+                (thread_id, title, datetime.now(UTC), thread_id, user_id),
+            )
+            row = cur.fetchone()
+            if row is None:
+                cur.execute(
+                    """
+                    SELECT
+                        t.id,
+                        t.user_id,
+                        t.title,
+                        t.created_at,
+                        t.updated_at,
+                        t.last_message_at,
+                        COALESCE(stats.message_count, 0),
+                        stats.last_message_preview
+                    FROM chat_threads t
+                    LEFT JOIN (
+                        SELECT
+                            thread_id,
+                            COUNT(*)::INTEGER AS message_count,
+                            (
+                                ARRAY_AGG(LEFT(content, 160) ORDER BY created_at DESC)
+                            )[1] AS last_message_preview
+                        FROM chat_messages
+                        WHERE thread_id = %s
+                        GROUP BY thread_id
+                    ) stats ON stats.thread_id = t.id
+                    WHERE t.id = %s AND t.user_id = %s
+                    """,
+                    (thread_id, thread_id, user_id),
+                )
+                row = cur.fetchone()
+            conn.commit()
+        if row is None:
+            raise KeyError(thread_id)
+        return self._build_chat_thread(row)
+
+    def list_chat_threads(self, user_id: str) -> list[ChatThreadRecord]:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    t.id,
+                    t.user_id,
+                    t.title,
+                    t.created_at,
+                    t.updated_at,
+                    t.last_message_at,
+                    COALESCE(stats.message_count, 0),
+                    stats.last_message_preview
+                FROM chat_threads t
+                LEFT JOIN (
+                    SELECT
+                        thread_id,
+                        COUNT(*)::INTEGER AS message_count,
+                        (
+                            ARRAY_AGG(LEFT(content, 160) ORDER BY created_at DESC)
+                        )[1] AS last_message_preview
+                    FROM chat_messages
+                    GROUP BY thread_id
+                ) stats ON stats.thread_id = t.id
+                WHERE t.user_id = %s
+                ORDER BY t.last_message_at DESC, t.updated_at DESC
+                """,
+                (user_id,),
+            )
+            rows = cur.fetchall()
+        return [self._build_chat_thread(row) for row in rows]
+
+    def append_chat_message(
+        self,
+        *,
+        user_id: str,
+        thread_id: str,
+        role: str,
+        content: str,
+        source_record_id: str | None,
+        created_at: datetime | None = None,
+    ) -> ChatMessageRecord:
+        timestamp = created_at or datetime.now(UTC)
+        message_id = str(uuid4())
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO chat_messages (
+                    id, thread_id, user_id, role, content, source_record_id, created_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                RETURNING id, thread_id, user_id, role, content, source_record_id, created_at
+                """,
+                (message_id, thread_id, user_id, role, content, source_record_id, timestamp),
+            )
+            row = cur.fetchone()
+            cur.execute(
+                """
+                UPDATE chat_threads
+                SET updated_at = %s,
+                    last_message_at = %s
+                WHERE id = %s AND user_id = %s
+                """,
+                (timestamp, timestamp, thread_id, user_id),
+            )
+            conn.commit()
+        return self._build_chat_message(row)
+
+    def list_chat_messages(
+        self,
+        *,
+        user_id: str,
+        thread_id: str,
+    ) -> list[ChatMessageRecord]:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, thread_id, user_id, role, content, source_record_id, created_at
+                FROM chat_messages
+                WHERE user_id = %s AND thread_id = %s
+                ORDER BY created_at ASC
+                """,
+                (user_id, thread_id),
+            )
+            rows = cur.fetchall()
+        return [self._build_chat_message(row) for row in rows]
+
+    def replace_chat_message(
+        self,
+        *,
+        user_id: str,
+        source_record_id: str,
+        role: str,
+        content: str,
+    ) -> ChatMessageRecord | None:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE chat_messages
+                SET content = %s
+                WHERE id = (
+                    SELECT id
+                    FROM chat_messages
+                    WHERE user_id = %s
+                      AND source_record_id = %s
+                      AND role = %s
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                )
+                RETURNING id, thread_id, user_id, role, content, source_record_id, created_at
+                """,
+                (content, user_id, source_record_id, role),
+            )
+            row = cur.fetchone()
+            if row is not None:
+                cur.execute(
+                    """
+                    UPDATE chat_threads
+                    SET updated_at = %s
+                    WHERE id = %s AND user_id = %s
+                    """,
+                    (datetime.now(UTC), row[1], user_id),
+                )
+            conn.commit()
+        return None if row is None else self._build_chat_message(row)
+
     def _connect(self):
         if psycopg is None:  # pragma: no cover
             raise RuntimeError("psycopg is not installed")
@@ -1503,6 +2139,82 @@ def get_alias_resolution_for_user(
         user_id=user_id,
         entity_type=entity_type,
         raw_name=raw_name,
+    )
+
+
+def ensure_chat_thread_for_user(
+    *,
+    user_id: str,
+    thread_id: str,
+    title: str,
+    created_at: datetime | None = None,
+    last_message_at: datetime | None = None,
+) -> ChatThreadRecord:
+    return get_memory_store().ensure_chat_thread(
+        user_id=user_id,
+        thread_id=thread_id,
+        title=title,
+        created_at=created_at,
+        last_message_at=last_message_at,
+    )
+
+
+def update_chat_thread_title_for_user(
+    *,
+    user_id: str,
+    thread_id: str,
+    title: str,
+) -> ChatThreadRecord:
+    return get_memory_store().update_chat_thread_title(
+        user_id=user_id,
+        thread_id=thread_id,
+        title=title,
+    )
+
+
+def list_chat_threads_for_user(user_id: str) -> list[ChatThreadRecord]:
+    return get_memory_store().list_chat_threads(user_id)
+
+
+def append_chat_message_for_user(
+    *,
+    user_id: str,
+    thread_id: str,
+    role: str,
+    content: str,
+    source_record_id: str | None,
+    created_at: datetime | None = None,
+) -> ChatMessageRecord:
+    return get_memory_store().append_chat_message(
+        user_id=user_id,
+        thread_id=thread_id,
+        role=role,
+        content=content,
+        source_record_id=source_record_id,
+        created_at=created_at,
+    )
+
+
+def list_chat_messages_for_user(
+    *,
+    user_id: str,
+    thread_id: str,
+) -> list[ChatMessageRecord]:
+    return get_memory_store().list_chat_messages(user_id=user_id, thread_id=thread_id)
+
+
+def replace_chat_message_for_user(
+    *,
+    user_id: str,
+    source_record_id: str,
+    role: str,
+    content: str,
+) -> ChatMessageRecord | None:
+    return get_memory_store().replace_chat_message(
+        user_id=user_id,
+        source_record_id=source_record_id,
+        role=role,
+        content=content,
     )
 
 
