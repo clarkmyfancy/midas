@@ -97,6 +97,11 @@ class WeaviateCleanupResult:
 
 
 @dataclass(frozen=True)
+class WeaviateLocalCleanupResult:
+    deleted_class: bool
+
+
+@dataclass(frozen=True)
 class GraphCleanupResult:
     deleted_observation_ids: list[str]
     deleted_relationships: int
@@ -105,6 +110,13 @@ class GraphCleanupResult:
 
 @dataclass(frozen=True)
 class GraphUserCleanupResult:
+    deleted_observations: int
+    deleted_entities: int
+    deleted_relationships: int
+
+
+@dataclass(frozen=True)
+class GraphLocalCleanupResult:
     deleted_observations: int
     deleted_entities: int
     deleted_relationships: int
@@ -456,6 +468,14 @@ class WeaviateProjector:
                 raise
             deleted_object_ids.append(object_id)
         return WeaviateCleanupResult(deleted_object_ids=deleted_object_ids)
+
+    def delete_local_data(self) -> WeaviateLocalCleanupResult:
+        schema = call_json_api("GET", f"{self.base_url}/v1/schema")
+        classes = {item.get("class") for item in schema.get("classes", [])}
+        if VECTOR_CLASS_NAME not in classes:
+            return WeaviateLocalCleanupResult(deleted_class=False)
+        call_json_api("DELETE", f"{self.base_url}/v1/schema/{VECTOR_CLASS_NAME}")
+        return WeaviateLocalCleanupResult(deleted_class=True)
 
     def object_url(self, object_id: str) -> str:
         return f"{self.base_url}/v1/objects/{object_id}"
@@ -1172,6 +1192,36 @@ class GraphProjector:
             )
         deleted_observations, deleted_entities, deleted_relationships = rows[0].get("row", [0, 0, 0])
         return GraphUserCleanupResult(
+            deleted_observations=int(deleted_observations),
+            deleted_entities=int(deleted_entities),
+            deleted_relationships=int(deleted_relationships),
+        )
+
+    def delete_local_data(self) -> GraphLocalCleanupResult:
+        result = self._query(
+            """
+            OPTIONAL MATCH (n)
+            WHERE 'Observation' IN labels(n) OR 'Entity' IN labels(n)
+            OPTIONAL MATCH (n)-[r]-()
+            WITH [node IN collect(DISTINCT n) WHERE node IS NOT NULL] AS nodes,
+                 [relationship IN collect(DISTINCT r) WHERE relationship IS NOT NULL] AS relationships
+            WITH nodes,
+                 size([node IN nodes WHERE 'Observation' IN labels(node)]) AS deleted_observations,
+                 size([node IN nodes WHERE 'Entity' IN labels(node)]) AS deleted_entities,
+                 size(relationships) AS deleted_relationships
+            FOREACH (node IN nodes | DETACH DELETE node)
+            RETURN deleted_observations, deleted_entities, deleted_relationships
+            """
+        )
+        rows = result.get("results", [{}])[0].get("data", [])
+        if not rows:
+            return GraphLocalCleanupResult(
+                deleted_observations=0,
+                deleted_entities=0,
+                deleted_relationships=0,
+            )
+        deleted_observations, deleted_entities, deleted_relationships = rows[0].get("row", [0, 0, 0])
+        return GraphLocalCleanupResult(
             deleted_observations=int(deleted_observations),
             deleted_entities=int(deleted_entities),
             deleted_relationships=int(deleted_relationships),

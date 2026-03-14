@@ -2,7 +2,12 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from midas.core.loader import load_capabilities
-from midas.core.projections import GraphUserCleanupResult, WeaviateCleanupResult
+from midas.core.projections import (
+    GraphLocalCleanupResult,
+    GraphUserCleanupResult,
+    WeaviateCleanupResult,
+    WeaviateLocalCleanupResult,
+)
 
 
 client = TestClient(app)
@@ -127,6 +132,94 @@ def test_auth_delete_data_clears_account_data_but_keeps_account(monkeypatch) -> 
     assert owner_me_response.status_code == 200
     assert owner_me_response.json()["email"] == "user@example.com"
     assert [entry["journal_entry"] for entry in viewer_entries_response.json()["entries"]] == ["Viewer entry."]
+
+
+def test_dev_local_data_wipe_clears_all_memory_data_but_keeps_accounts(monkeypatch) -> None:
+    monkeypatch.setenv("MIDAS_ENV", "development")
+    first_token = register_and_login()
+    second_token = client.post(
+        "/v1/auth/register",
+        json={"email": "local-second@example.com", "password": "supersecret"},
+    ).json()["access_token"]
+
+    client.post(
+        "/v1/journal-entries",
+        json={"journal_entry": "First user entry.", "goals": []},
+        headers={"Authorization": f"Bearer {first_token}"},
+    )
+    client.post(
+        "/v1/journal-entries",
+        json={"journal_entry": "Second user entry.", "goals": []},
+        headers={"Authorization": f"Bearer {second_token}"},
+    )
+
+    monkeypatch.setattr(
+        "app.main.WeaviateProjector.delete_local_data",
+        lambda self: WeaviateLocalCleanupResult(deleted_class=True),
+    )
+    monkeypatch.setattr(
+        "app.main.GraphProjector.delete_local_data",
+        lambda self: GraphLocalCleanupResult(
+            deleted_observations=2,
+            deleted_entities=4,
+            deleted_relationships=5,
+        ),
+    )
+
+    wipe_response = client.delete(
+        "/v1/dev/local-data",
+        headers={"Authorization": f"Bearer {first_token}"},
+    )
+    first_entries_response = client.get(
+        "/v1/journal-entries",
+        headers={"Authorization": f"Bearer {first_token}"},
+    )
+    second_entries_response = client.get(
+        "/v1/journal-entries",
+        headers={"Authorization": f"Bearer {second_token}"},
+    )
+    first_me_response = client.get(
+        "/v1/auth/me",
+        headers={"Authorization": f"Bearer {first_token}"},
+    )
+    second_me_response = client.get(
+        "/v1/auth/me",
+        headers={"Authorization": f"Bearer {second_token}"},
+    )
+
+    assert wipe_response.status_code == 200
+    cleanup_by_store = {item["store"]: item for item in wipe_response.json()["cleanup"]}
+    assert cleanup_by_store["postgres"]["details"] == {
+        "deleted_alias_resolution_count": 0,
+        "deleted_clarification_task_count": 0,
+        "deleted_entry_count": 2,
+        "deleted_projection_job_count": 6,
+    }
+    assert cleanup_by_store["weaviate"]["details"] == {
+        "class_name": "MemoryArtifact",
+        "deleted_class": True,
+    }
+    assert cleanup_by_store["neo4j"]["details"] == {
+        "deleted_entity_count": 4,
+        "deleted_observation_count": 2,
+        "deleted_relationship_count": 5,
+    }
+    assert first_entries_response.json()["entries"] == []
+    assert second_entries_response.json()["entries"] == []
+    assert first_me_response.status_code == 200
+    assert second_me_response.status_code == 200
+
+
+def test_dev_local_data_wipe_is_hidden_in_production(monkeypatch) -> None:
+    monkeypatch.setenv("MIDAS_ENV", "production")
+    access_token = register_and_login()
+
+    response = client.delete(
+        "/v1/dev/local-data",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+
+    assert response.status_code == 404
 
 
 def test_reflection_endpoint() -> None:

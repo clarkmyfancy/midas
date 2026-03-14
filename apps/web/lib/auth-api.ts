@@ -3,6 +3,7 @@ import type {
   AuthRegisterRequest,
   AuthTokenResponse,
   AuthUserResponse,
+  LocalDataWipeResponse,
   UserDataDeleteResponse,
 } from "@midas/types";
 
@@ -57,6 +58,17 @@ export function getCurrentUser(accessToken: string, fetcher: typeof fetch = fetc
 export function deleteAccountData(accessToken: string, fetcher: typeof fetch = fetch) {
   return requestJson<UserDataDeleteResponse>(
     "/api/v1/auth/data",
+    {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      method: "DELETE",
+    },
+    fetcher,
+  );
+}
+
+export function wipeLocalData(accessToken: string, fetcher: typeof fetch = fetch) {
+  return requestJson<LocalDataWipeResponse>(
+    "/api/v1/dev/local-data",
     {
       headers: { Authorization: `Bearer ${accessToken}` },
       method: "DELETE",

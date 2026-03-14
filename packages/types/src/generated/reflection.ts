@@ -121,6 +121,10 @@ export interface JournalIngestResponse {
   projection_jobs: ProjectionJobResponse[];
 }
 
+export interface LocalDataWipeResponse {
+  cleanup: DerivedStoreCleanupResponse[];
+}
+
 export interface MemoryDebugResponse {
   entry: JournalEntryResponse;
   projection_jobs: ProjectionJobResponse[];

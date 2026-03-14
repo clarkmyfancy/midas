@@ -143,6 +143,59 @@ def test_memory_store_delete_user_data_removes_only_current_users_records() -> N
     assert [entry.id for entry in store.list_journal_entries("user-2")] == [other_entry.id]
 
 
+def test_memory_store_delete_local_data_removes_all_memory_records_but_not_auth() -> None:
+    store = MemoryMemoryStore()
+    first_entry, first_jobs = store.create_journal_entry(
+        user_id="user-1",
+        journal_entry="First entry",
+        goals=[],
+        thread_id=None,
+        steps=None,
+        sleep_hours=None,
+        hrv_ms=None,
+        source="manual",
+    )
+    second_entry, second_jobs = store.create_journal_entry(
+        user_id="user-2",
+        journal_entry="Second entry",
+        goals=[],
+        thread_id=None,
+        steps=None,
+        sleep_hours=None,
+        hrv_ms=None,
+        source="manual",
+    )
+    first_task = store.create_clarification_task(
+        user_id="user-1",
+        source_record_id=first_entry.id,
+        entity_type="person",
+        raw_name="Josh",
+        candidate_canonical_name="joshua",
+        prompt="Does Josh refer to Joshua?",
+        options=["confirm_merge", "keep_separate", "dismiss"],
+        confidence=0.63,
+        evidence="Alias normalization inferred a merge.",
+    )
+    store.resolve_clarification_task(
+        user_id="user-1",
+        task_id=first_task.id,
+        resolution="confirm_merge",
+    )
+
+    deleted = store.delete_local_data()
+
+    assert deleted.deleted_entry_ids == [second_entry.id, first_entry.id]
+    assert {job_id for job_id in deleted.deleted_projection_job_ids} == {
+        job.id for job in [*first_jobs, *second_jobs]
+    }
+    assert deleted.deleted_clarification_task_ids == [first_task.id]
+    assert deleted.deleted_alias_resolution_count == 1
+    assert store.list_journal_entries("user-1") == []
+    assert store.list_journal_entries("user-2") == []
+    assert store.list_projection_jobs("user-1") == []
+    assert store.list_projection_jobs("user-2") == []
+
+
 def test_heuristic_graph_extractor_merges_person_aliases_and_builds_relationships() -> None:
     entry, _ = MemoryMemoryStore().create_journal_entry(
         user_id="user-1",

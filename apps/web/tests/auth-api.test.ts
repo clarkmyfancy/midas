@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { deleteAccountData, getCurrentUser, loginWithApi, registerWithApi } from "../lib/auth-api";
+import {
+  deleteAccountData,
+  getCurrentUser,
+  loginWithApi,
+  registerWithApi,
+  wipeLocalData,
+} from "../lib/auth-api";
 
 describe("auth api", () => {
   it("registers through the backend auth endpoint", async () => {
@@ -104,6 +110,34 @@ describe("auth api", () => {
     const response = await deleteAccountData("token-123", fetcher as typeof fetch);
 
     expect(response.user_id).toBe("user-1");
+    expect(response.cleanup.map((item) => item.store)).toEqual(["postgres", "weaviate", "neo4j"]);
+  });
+
+  it("wipes local data through the dev endpoint", async () => {
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      expect(init?.method).toBe("DELETE");
+      expect(init?.headers).toEqual({
+        Accept: "application/json",
+        Authorization: "Bearer token-123",
+      });
+
+      return new Response(
+        JSON.stringify({
+          cleanup: [
+            { store: "postgres", success: true, deleted_count: 8 },
+            { store: "weaviate", success: true, deleted_count: 1, details: { deleted_class: true } },
+            { store: "neo4j", success: true, deleted_count: 6 },
+          ],
+        }),
+        {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        },
+      );
+    });
+
+    const response = await wipeLocalData("token-123", fetcher as typeof fetch);
+
     expect(response.cleanup.map((item) => item.store)).toEqual(["postgres", "weaviate", "neo4j"]);
   });
 });

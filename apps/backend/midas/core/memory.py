@@ -91,6 +91,14 @@ class UserDataDeleteResult:
     deleted_alias_resolution_count: int
 
 
+@dataclass(frozen=True)
+class LocalDataDeleteResult:
+    deleted_entry_ids: list[str]
+    deleted_projection_job_ids: list[str]
+    deleted_clarification_task_ids: list[str]
+    deleted_alias_resolution_count: int
+
+
 class MemoryStore:
     def setup(self) -> None:
         raise NotImplementedError
@@ -123,6 +131,9 @@ class MemoryStore:
         raise NotImplementedError
 
     def delete_user_data(self, user_id: str) -> UserDataDeleteResult:
+        raise NotImplementedError
+
+    def delete_local_data(self) -> LocalDataDeleteResult:
         raise NotImplementedError
 
     def list_projection_jobs(
@@ -353,6 +364,39 @@ class MemoryMemoryStore(MemoryStore):
             deleted_projection_job_ids=job_ids,
             deleted_clarification_task_ids=clarification_task_ids,
             deleted_alias_resolution_count=len(alias_resolution_keys),
+        )
+
+    def delete_local_data(self) -> LocalDataDeleteResult:
+        with self._lock:
+            entries = sorted(
+                list(self._entries_by_id.values()),
+                key=lambda item: item.created_at,
+                reverse=True,
+            )
+            jobs = sorted(
+                list(self._jobs_by_id.values()),
+                key=lambda item: item.created_at,
+                reverse=True,
+            )
+            tasks = sorted(
+                list(self._clarification_tasks_by_id.values()),
+                key=lambda item: item.created_at,
+                reverse=True,
+            )
+            alias_resolution_count = len(self._alias_resolution_by_key)
+            self._entries_by_id.clear()
+            self._entry_ids_by_user.clear()
+            self._jobs_by_id.clear()
+            self._job_ids_by_user.clear()
+            self._clarification_tasks_by_id.clear()
+            self._clarification_task_ids_by_user.clear()
+            self._alias_resolution_by_key.clear()
+
+        return LocalDataDeleteResult(
+            deleted_entry_ids=[entry.id for entry in entries],
+            deleted_projection_job_ids=[job.id for job in jobs],
+            deleted_clarification_task_ids=[task.id for task in tasks],
+            deleted_alias_resolution_count=alias_resolution_count,
         )
 
     def list_projection_jobs(
@@ -912,6 +956,51 @@ class PostgresMemoryStore(MemoryStore):
             deleted_alias_resolution_count=deleted_alias_resolution_count,
         )
 
+    def delete_local_data(self) -> LocalDataDeleteResult:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id
+                FROM journal_entries
+                ORDER BY created_at DESC
+                """
+            )
+            entry_ids = [row[0] for row in cur.fetchall()]
+
+            cur.execute(
+                """
+                SELECT id
+                FROM memory_projection_jobs
+                ORDER BY created_at DESC
+                """
+            )
+            job_ids = [row[0] for row in cur.fetchall()]
+
+            cur.execute(
+                """
+                SELECT id
+                FROM clarification_tasks
+                ORDER BY created_at DESC
+                """
+            )
+            clarification_task_ids = [row[0] for row in cur.fetchall()]
+
+            cur.execute("SELECT COUNT(*) FROM alias_resolutions")
+            deleted_alias_resolution_count = int(cur.fetchone()[0])
+
+            cur.execute("DELETE FROM alias_resolutions")
+            cur.execute("DELETE FROM clarification_tasks")
+            cur.execute("DELETE FROM memory_projection_jobs")
+            cur.execute("DELETE FROM journal_entries")
+            conn.commit()
+
+        return LocalDataDeleteResult(
+            deleted_entry_ids=entry_ids,
+            deleted_projection_job_ids=job_ids,
+            deleted_clarification_task_ids=clarification_task_ids,
+            deleted_alias_resolution_count=deleted_alias_resolution_count,
+        )
+
     def list_projection_jobs(
         self,
         user_id: str,
@@ -1319,6 +1408,10 @@ def delete_journal_entry_for_user(
 
 def delete_user_data_for_user(user_id: str) -> UserDataDeleteResult:
     return get_memory_store().delete_user_data(user_id)
+
+
+def delete_local_data() -> LocalDataDeleteResult:
+    return get_memory_store().delete_local_data()
 
 
 def list_projection_jobs_for_user(

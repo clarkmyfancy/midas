@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { ApiError } from "../lib/api";
-import { deleteAccountData } from "../lib/auth-api";
+import { deleteAccountData, wipeLocalData } from "../lib/auth-api";
 import { useAuth } from "./auth-provider";
 
 function deriveUsername(email: string) {
@@ -19,11 +19,13 @@ function summarizeCleanup(cleanup: DerivedStoreCleanupResponse[]) {
 export function ProfilePageShell() {
   const router = useRouter();
   const { isReady, logout, session } = useAuth();
+  const isDevelopment = process.env.NODE_ENV !== "production";
   const [activeSection, setActiveSection] = useState<"profile" | "data">("profile");
   const [cleanup, setCleanup] = useState<DerivedStoreCleanupResponse[]>([]);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isDeletingData, setIsDeletingData] = useState(false);
+  const [isWipingLocalData, setIsWipingLocalData] = useState(false);
 
   useEffect(() => {
     if (isReady && !session) {
@@ -40,7 +42,7 @@ export function ProfilePageShell() {
   }
 
   async function handleDeleteData() {
-    if (!session || isDeletingData) {
+    if (!session || isDeletingData || isWipingLocalData) {
       return;
     }
 
@@ -67,6 +69,37 @@ export function ProfilePageShell() {
       setError(caughtError instanceof Error ? caughtError.message : "Failed to delete account data.");
     } finally {
       setIsDeletingData(false);
+    }
+  }
+
+  async function handleWipeLocalData() {
+    if (!session || isDeletingData || isWipingLocalData) {
+      return;
+    }
+
+    const shouldDelete = window.confirm(
+      "Delete all local Midas memory data for every account on this environment? User accounts will stay active.",
+    );
+    if (!shouldDelete) {
+      return;
+    }
+
+    setIsWipingLocalData(true);
+    setError(null);
+    setStatusMessage("Wiping all local memory data from Postgres, Weaviate, and Neo4j...");
+    try {
+      const response = await wipeLocalData(session.accessToken);
+      setCleanup(response.cleanup);
+      setStatusMessage(`Wiped local memory data. Cleanup: ${summarizeCleanup(response.cleanup)}.`);
+    } catch (caughtError) {
+      if (caughtError instanceof ApiError && caughtError.status === 401) {
+        logout();
+        router.replace("/login");
+        return;
+      }
+      setError(caughtError instanceof Error ? caughtError.message : "Failed to wipe local data.");
+    } finally {
+      setIsWipingLocalData(false);
     }
   }
 
@@ -175,13 +208,33 @@ export function ProfilePageShell() {
                 </div>
                 <button
                   className="profile-delete-button"
-                  disabled={isDeletingData}
+                  disabled={isDeletingData || isWipingLocalData}
                   onClick={() => void handleDeleteData()}
                   type="button"
                 >
                   {isDeletingData ? "Deleting..." : "Delete all data"}
                 </button>
               </div>
+
+              {isDevelopment ? (
+                <div className="profile-danger-zone profile-danger-zone-dev">
+                  <div>
+                    <p className="profile-danger-title">Developer local wipe</p>
+                    <p className="profile-danger-copy">
+                      Deletes all local memory data for every account in this environment, including
+                      Weaviate objects and schema plus the Neo4j graph. User accounts are preserved.
+                    </p>
+                  </div>
+                  <button
+                    className="profile-delete-button profile-delete-button-dev"
+                    disabled={isDeletingData || isWipingLocalData}
+                    onClick={() => void handleWipeLocalData()}
+                    type="button"
+                  >
+                    {isWipingLocalData ? "Wiping..." : "Wipe local data"}
+                  </button>
+                </div>
+              ) : null}
             </article>
           )}
 

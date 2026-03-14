@@ -154,6 +154,10 @@ class UserDataDeleteResponse(BaseModel):
     cleanup: list[DerivedStoreCleanupResponse]
 
 
+class LocalDataWipeResponse(BaseModel):
+    cleanup: list[DerivedStoreCleanupResponse]
+
+
 class MemoryDebugResponse(BaseModel):
     entry: JournalEntryResponse
     projection_jobs: list[ProjectionJobResponse]

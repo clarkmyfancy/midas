@@ -36,6 +36,7 @@ from app.schemas.journal import (
     JournalEntryListResponse,
     JournalEntryResponse,
     JournalIngestResponse,
+    LocalDataWipeResponse,
     UserDataDeleteResponse,
     MemorySettingsResponse,
     MemoryDebugResponse,
@@ -60,6 +61,7 @@ from midas.core.entitlements import (
 from midas.core.loader import load_capabilities
 from midas.core.memory import (
     create_journal_entry_for_user,
+    delete_local_data,
     delete_journal_entry_for_user,
     delete_user_data_for_user,
     list_clarification_tasks_for_user,
@@ -98,6 +100,11 @@ app.add_middleware(
 load_capabilities()
 init_auth_storage()
 init_memory_storage()
+
+
+def is_development_mode() -> bool:
+    environment = os.getenv("MIDAS_ENV") or os.getenv("NODE_ENV") or "development"
+    return environment.strip().lower() not in {"prod", "production"}
 
 
 def serialize_journal_entry(entry) -> JournalEntryResponse:
@@ -636,6 +643,84 @@ def auth_delete_user_data(
         )
 
     return UserDataDeleteResponse(user_id=user.id, cleanup=cleanup)
+
+
+@app.delete("/api/v1/dev/local-data", response_model=LocalDataWipeResponse)
+@app.delete("/v1/dev/local-data", response_model=LocalDataWipeResponse)
+def dev_wipe_local_data(
+    _: Annotated[AuthUser, Depends(get_current_user)],
+) -> LocalDataWipeResponse:
+    if not is_development_mode():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+
+    deleted = delete_local_data()
+    cleanup = [
+        DerivedStoreCleanupResponse(
+            store="postgres",
+            success=True,
+            deleted_count=(
+                len(deleted.deleted_entry_ids)
+                + len(deleted.deleted_projection_job_ids)
+                + len(deleted.deleted_clarification_task_ids)
+                + deleted.deleted_alias_resolution_count
+            ),
+            deleted_ids=deleted.deleted_entry_ids,
+            details={
+                "deleted_entry_count": len(deleted.deleted_entry_ids),
+                "deleted_projection_job_count": len(deleted.deleted_projection_job_ids),
+                "deleted_clarification_task_count": len(deleted.deleted_clarification_task_ids),
+                "deleted_alias_resolution_count": deleted.deleted_alias_resolution_count,
+            },
+        )
+    ]
+
+    try:
+        weaviate_result = WeaviateProjector().delete_local_data()
+    except Exception as exc:
+        cleanup.append(
+            DerivedStoreCleanupResponse(
+                store="weaviate",
+                success=False,
+                deleted_count=0,
+                error=str(exc),
+            )
+        )
+    else:
+        cleanup.append(
+            DerivedStoreCleanupResponse(
+                store="weaviate",
+                success=True,
+                deleted_count=1 if weaviate_result.deleted_class else 0,
+                details={"deleted_class": weaviate_result.deleted_class, "class_name": VECTOR_CLASS_NAME},
+            )
+        )
+
+    try:
+        graph_result = GraphProjector().delete_local_data()
+    except Exception as exc:
+        cleanup.append(
+            DerivedStoreCleanupResponse(
+                store="neo4j",
+                success=False,
+                deleted_count=0,
+                error=str(exc),
+            )
+        )
+    else:
+        cleanup.append(
+            DerivedStoreCleanupResponse(
+                store="neo4j",
+                success=True,
+                deleted_count=graph_result.deleted_observations + graph_result.deleted_entities,
+                details={
+                    "deleted_observation_count": graph_result.deleted_observations,
+                    "deleted_entity_count": graph_result.deleted_entities,
+                    "deleted_relationship_count": graph_result.deleted_relationships,
+                },
+            )
+        )
+
+    return LocalDataWipeResponse(cleanup=cleanup)
 
 
 @app.get("/v1/capabilities", response_model=CapabilityMapResponse)

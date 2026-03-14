@@ -1094,6 +1094,12 @@ h2 {
   background: rgba(252, 237, 231, 0.95);
 }
 
+.profile-danger-zone-dev {
+  margin-top: 16px;
+  border-color: rgba(133, 103, 44, 0.42);
+  background: rgba(245, 239, 214, 0.92);
+}
+
 .profile-danger-title {
   margin: 0 0 6px;
   color: #612d23;
@@ -1118,6 +1124,11 @@ h2 {
   font-weight: 700;
   padding: 14px 18px;
   cursor: pointer;
+}
+
+.profile-delete-button-dev {
+  border-color: rgba(127, 95, 29, 0.95);
+  background: #7f5f1d;
 }
 
 .profile-delete-button:disabled {
