@@ -10,11 +10,10 @@ import { requestJson } from "./api";
 export function getWeeklyReview(
   accessToken: string,
   windowDays = 7,
-  confidenceThreshold = 0.65,
   fetcher: typeof fetch = fetch,
 ) {
   return requestJson<WeeklyReviewResponse>(
-    `/api/v1/review?window_days=${windowDays}&confidence_threshold=${confidenceThreshold}`,
+    `/api/v1/review?window_days=${windowDays}`,
     {
       headers: { Authorization: `Bearer ${accessToken}` },
       method: "GET",

@@ -508,15 +508,12 @@ def memory_settings() -> MemorySettingsResponse:
 @app.get("/api/v1/review", response_model=WeeklyReviewResponse)
 @app.get("/v1/review", response_model=WeeklyReviewResponse)
 def get_weekly_review(
-    _: Annotated[None, Depends(requires_entitlement("weekly_reflection"))],
     user: Annotated[AuthUser, Depends(get_current_user)],
     window_days: int = 7,
-    confidence_threshold: float = 0.65,
 ) -> WeeklyReviewResponse:
     result = build_weekly_review(
         user_id=user.id,
         window_days=window_days,
-        confidence_threshold=confidence_threshold,
     )
     return WeeklyReviewResponse(
         summary=result.summary,
@@ -525,23 +522,6 @@ def get_weekly_review(
         findings=[serialize_review_finding(finding) for finding in result.findings],
         stats=[serialize_review_stat(stat) for stat in result.stats],
         entries=[serialize_journal_entry(entry) for entry in result.entries],
-        memory_highlights=[
-            WeaviateArtifactResponse(
-                projection_job_id=str(artifact.get("projection_job_id", "")),
-                object_id=str(artifact.get("object_id", "")),
-                class_name=str(artifact.get("class_name", "")),
-                content=artifact.get("content"),
-                url=artifact.get("url"),
-                raw=artifact.get("raw"),
-            )
-            for artifact in result.memory_highlights
-        ],
-        graph=GraphObservationResponse(
-            observation=None,
-            nodes=[serialize_graph_node(node) for node in result.graph_nodes],
-            relationships=[serialize_graph_relationship(relationship) for relationship in result.graph_relationships],
-            cypher_browser_url=GraphProjector().browser_url(),
-        ),
         clarifications=[serialize_clarification_task(task) for task in result.clarifications],
         warnings=result.warnings,
     )
@@ -550,7 +530,7 @@ def get_weekly_review(
 @app.get("/api/v1/insights", response_model=InsightsResponse)
 @app.get("/v1/insights", response_model=InsightsResponse)
 def get_insights(
-    _: Annotated[None, Depends(requires_entitlement("mental_model_graph"))],
+    _: Annotated[None, Depends(requires_entitlement("advanced_analytics"))],
     user: Annotated[AuthUser, Depends(get_current_user)],
     window_days: int = 30,
     confidence_threshold: float = 0.65,
@@ -1160,6 +1140,6 @@ def capability_map(
 
 @app.get("/api/v1/pro/analytics")
 def pro_analytics_status(
-    _: Annotated[None, Depends(requires_entitlement("pro_analytics"))],
+    _: Annotated[None, Depends(requires_entitlement("advanced_analytics"))],
 ) -> dict[str, str]:
-    return {"status": "enabled", "feature": "pro_analytics"}
+    return {"status": "enabled", "feature": "advanced_analytics"}

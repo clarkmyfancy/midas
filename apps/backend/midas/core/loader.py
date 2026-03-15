@@ -40,9 +40,8 @@ def load_capabilities(*, force: bool = False):
     registry.reset()
     registry.update_capabilities(
         {
-            "pro_analytics": False,
-            "weekly_reflection": False,
-            "mental_model_graph": False,
+            "weekly_reflection": True,
+            "advanced_analytics": False,
         }
     )
 
@@ -52,20 +51,15 @@ def load_capabilities(*, force: bool = False):
         registry.register(
             ReflectionCoachInterface,
             CoreFallbackAgent(),
-            feature_key="pro_analytics",
-            enabled=False,
         )
     else:
         registry.register(
             ReflectionCoachInterface,
             ProReflectionCoach(),
-            feature_key="pro_analytics",
-            enabled=True,
         )
         registry.update_capabilities(
             {
-                "weekly_reflection": True,
-                "mental_model_graph": True,
+                "advanced_analytics": True,
             }
         )
 

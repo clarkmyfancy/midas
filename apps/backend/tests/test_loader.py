@@ -8,7 +8,8 @@ def test_loader_registers_core_fallback_when_pro_package_is_missing() -> None:
     coach = registry.resolve(ReflectionCoachInterface)
 
     assert isinstance(coach, CoreFallbackAgent)
-    assert registry.is_pro_enabled("pro_analytics") is False
+    assert registry.is_pro_enabled("advanced_analytics") is False
+    assert registry.is_pro_enabled("weekly_reflection") is True
 
 
 def test_registry_is_singleton() -> None:

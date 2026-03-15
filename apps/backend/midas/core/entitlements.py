@@ -699,9 +699,13 @@ def get_current_user(
 def resolve_capabilities_for_user(user: AuthUser | None) -> dict[str, bool]:
     registry = load_capabilities()
     capabilities: dict[str, bool] = {}
+    core_capabilities = {"weekly_reflection"}
 
     for feature_key, backend_available in registry.capability_map().items():
-        capabilities[feature_key] = backend_available and bool(user and user.is_pro)
+        if feature_key in core_capabilities:
+            capabilities[feature_key] = backend_available and user is not None
+        else:
+            capabilities[feature_key] = backend_available and bool(user and user.is_pro)
 
     return capabilities
 

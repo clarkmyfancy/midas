@@ -2,12 +2,7 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
-from app.schemas.journal import (
-    ClarificationTaskResponse,
-    GraphObservationResponse,
-    JournalEntryResponse,
-    WeaviateArtifactResponse,
-)
+from app.schemas.journal import ClarificationTaskResponse, JournalEntryResponse
 
 
 class ReviewFindingResponse(BaseModel):
@@ -28,7 +23,5 @@ class WeeklyReviewResponse(BaseModel):
     findings: list[ReviewFindingResponse]
     stats: list[ReviewStatResponse]
     entries: list[JournalEntryResponse]
-    memory_highlights: list[WeaviateArtifactResponse]
-    graph: GraphObservationResponse
     clarifications: list[ClarificationTaskResponse]
     warnings: list[str]

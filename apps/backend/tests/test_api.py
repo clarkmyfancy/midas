@@ -393,9 +393,25 @@ def test_capabilities_endpoint_defaults_to_core_mode() -> None:
     assert response.status_code == 200
     assert response.json() == {
         "capabilities": {
-            "mental_model_graph": False,
-            "pro_analytics": False,
+            "advanced_analytics": False,
             "weekly_reflection": False,
+        }
+    }
+
+
+def test_capabilities_endpoint_exposes_weekly_reflection_to_authenticated_core_users() -> None:
+    access_token = register_and_login()
+
+    response = client.get(
+        "/v1/capabilities",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "capabilities": {
+            "advanced_analytics": False,
+            "weekly_reflection": True,
         }
     }
 
@@ -411,7 +427,7 @@ def test_pro_route_requires_installed_capability() -> None:
     assert response.status_code in {403, 503}
 
 
-def test_review_route_requires_weekly_reflection_entitlement() -> None:
+def test_review_route_is_available_to_core_users() -> None:
     load_capabilities(force=True)
     access_token = register_and_login()
 
@@ -420,23 +436,12 @@ def test_review_route_requires_weekly_reflection_entitlement() -> None:
         headers={"Authorization": f"Bearer {access_token}"},
     )
 
-    assert response.status_code == 503
+    assert response.status_code == 200
+    assert "memory_highlights" not in response.json()
+    assert "graph" not in response.json()
 
 
-def test_review_route_rejects_core_users_when_weekly_reflection_is_installed() -> None:
-    load_capabilities(force=True)
-    get_registry().set_capability("weekly_reflection", True)
-    access_token = register_and_login()
-
-    response = client.get(
-        "/v1/review",
-        headers={"Authorization": f"Bearer {access_token}"},
-    )
-
-    assert response.status_code == 403
-
-
-def test_insights_route_requires_mental_model_graph_entitlement() -> None:
+def test_insights_route_requires_advanced_analytics_entitlement() -> None:
     load_capabilities(force=True)
     access_token = register_and_login()
 
@@ -448,9 +453,9 @@ def test_insights_route_requires_mental_model_graph_entitlement() -> None:
     assert response.status_code == 503
 
 
-def test_insights_route_rejects_core_users_when_mental_model_graph_is_installed() -> None:
+def test_insights_route_rejects_core_users_when_advanced_analytics_is_installed() -> None:
     load_capabilities(force=True)
-    get_registry().set_capability("mental_model_graph", True)
+    get_registry().set_capability("advanced_analytics", True)
     access_token = register_and_login()
 
     response = client.get(

@@ -1,8 +1,12 @@
+from dataclasses import replace
+
 from fastapi.testclient import TestClient
 
 from app.main import app
+from midas.core.entitlements import get_auth_store
 from midas.core.memory import create_clarification_task_for_user
 from midas.core.projections import build_weaviate_projection_payload, extract_graph
+from midas.core.registry import get_registry
 
 
 client = TestClient(app)
@@ -286,6 +290,14 @@ def register_user(email: str) -> str:
     return response.json()["access_token"]
 
 
+def promote_user_to_pro(email: str) -> None:
+    store = get_auth_store()
+    normalized_email = email.strip().lower()
+    user_id = store._user_ids_by_email[normalized_email]  # type: ignore[attr-defined]
+    user = store._users_by_id[user_id]  # type: ignore[attr-defined]
+    store._users_by_id[user_id] = replace(user, is_pro=True)  # type: ignore[attr-defined]
+
+
 def create_entry(access_token: str, text: str) -> str:
     response = client.post(
         "/v1/journal-entries",
@@ -436,8 +448,6 @@ def test_review_endpoint_assembles_hybrid_memory_payload(monkeypatch) -> None:
     monkeypatch.setattr("midas.core.projections.GraphProjector", FakeGraphProjector)
     monkeypatch.setattr("app.main.WeaviateProjector", FakeWeaviateProjector)
     monkeypatch.setattr("app.main.GraphProjector", FakeGraphProjector)
-    monkeypatch.setattr("midas.core.review.WeaviateProjector", FakeWeaviateProjector)
-    monkeypatch.setattr("midas.core.review.GraphProjector", FakeGraphProjector)
     monkeypatch.setenv("MIDAS_AUTO_PROJECT", "0")
 
     access_token = register_user("review@example.com")
@@ -475,114 +485,9 @@ def test_review_endpoint_assembles_hybrid_memory_payload(monkeypatch) -> None:
     payload = review_response.json()
     assert payload["summary"]
     assert payload["entries"]
-    assert payload["memory_highlights"]
-    assert len(payload["memory_highlights"]) == 1
-    assert payload["memory_highlights"][0]["raw"]["properties"]["content_kind"] == "semantic_summary"
-    assert payload["graph"]["nodes"]
     assert payload["clarifications"]
-
-
-def test_review_endpoint_filters_low_confidence_graph_edges(monkeypatch) -> None:
-    class ReviewFilterGraphProjector(FakeGraphProjector):
-        def project(self, job, entry) -> None:
-            self.observations[(entry.user_id, entry.id)] = {
-                "observation": {
-                    "id": job.id,
-                    "labels": ["Observation"],
-                    "properties": {
-                        "source_record_id": entry.id,
-                        "summary": f"Graph summary for {entry.id}",
-                    },
-                },
-                "nodes": [
-                    {
-                        "id": job.id,
-                        "labels": ["Observation"],
-                        "properties": {"source_record_id": entry.id},
-                    },
-                    {
-                        "id": f"entity-a-{entry.id}",
-                        "labels": ["Entity", "Person"],
-                        "properties": {"canonical_name": "self", "display_name": "Self"},
-                    },
-                    {
-                        "id": f"entity-b-{entry.id}",
-                        "labels": ["Entity", "Mood"],
-                        "properties": {"canonical_name": "anxious", "display_name": "anxious"},
-                    },
-                    {
-                        "id": f"entity-c-{entry.id}",
-                        "labels": ["Entity", "Project"],
-                        "properties": {"canonical_name": "midas", "display_name": "Midas"},
-                    },
-                ],
-                "relationships": [
-                    {
-                        "id": f"rel-observed-{entry.id}",
-                        "type": "OBSERVED",
-                        "startNode": job.id,
-                        "endNode": f"entity-a-{entry.id}",
-                        "properties": {"source_record_id": entry.id, "confidence": 0.9},
-                    },
-                    {
-                        "id": f"rel-high-{entry.id}",
-                        "type": "EXPERIENCED",
-                        "startNode": f"entity-a-{entry.id}",
-                        "endNode": f"entity-b-{entry.id}",
-                        "properties": {"confidence": 0.9, "confidence_bucket": "high", "extraction_source": "model"},
-                    },
-                    {
-                        "id": f"rel-low-{entry.id}",
-                        "type": "WORKED_ON",
-                        "startNode": f"entity-a-{entry.id}",
-                        "endNode": f"entity-c-{entry.id}",
-                        "properties": {"confidence": 0.4, "confidence_bucket": "low", "extraction_source": "heuristic"},
-                    },
-                ],
-            }
-
-    FakeWeaviateProjector.objects = {}
-    ReviewFilterGraphProjector.observations = {}
-    monkeypatch.setattr("midas.core.projections.WeaviateProjector", FakeWeaviateProjector)
-    monkeypatch.setattr("midas.core.projections.GraphProjector", ReviewFilterGraphProjector)
-    monkeypatch.setattr("app.main.WeaviateProjector", FakeWeaviateProjector)
-    monkeypatch.setattr("app.main.GraphProjector", ReviewFilterGraphProjector)
-    monkeypatch.setattr("midas.core.review.WeaviateProjector", FakeWeaviateProjector)
-    monkeypatch.setattr("midas.core.review.GraphProjector", ReviewFilterGraphProjector)
-    monkeypatch.setenv("MIDAS_AUTO_PROJECT", "0")
-
-    access_token = register_user("review-filter@example.com")
-    create_entry(access_token, "I felt anxious working on Midas.")
-
-    run_response = client.post(
-        "/v1/projection-jobs/run?limit=10",
-        headers={"Authorization": f"Bearer {access_token}"},
-    )
-    assert run_response.status_code == 200
-
-    filtered_response = client.get(
-        "/v1/review?confidence_threshold=0.65",
-        headers={"Authorization": f"Bearer {access_token}"},
-    )
-    assert filtered_response.status_code == 200
-    filtered_relationships = [
-        relationship
-        for relationship in filtered_response.json()["graph"]["relationships"]
-        if relationship["type"] != "OBSERVED"
-    ]
-    assert [relationship["type"] for relationship in filtered_relationships] == ["EXPERIENCED"]
-
-    unfiltered_response = client.get(
-        "/v1/review?confidence_threshold=0.0",
-        headers={"Authorization": f"Bearer {access_token}"},
-    )
-    assert unfiltered_response.status_code == 200
-    unfiltered_relationships = [
-        relationship
-        for relationship in unfiltered_response.json()["graph"]["relationships"]
-        if relationship["type"] != "OBSERVED"
-    ]
-    assert {relationship["type"] for relationship in unfiltered_relationships} == {"EXPERIENCED", "WORKED_ON"}
+    assert "memory_highlights" not in payload
+    assert "graph" not in payload
 
 
 def test_insights_endpoint_returns_longitudinal_synthesis(monkeypatch) -> None:
@@ -592,13 +497,14 @@ def test_insights_endpoint_returns_longitudinal_synthesis(monkeypatch) -> None:
     monkeypatch.setattr("midas.core.projections.GraphProjector", InsightGraphProjector)
     monkeypatch.setattr("app.main.WeaviateProjector", FakeWeaviateProjector)
     monkeypatch.setattr("app.main.GraphProjector", InsightGraphProjector)
-    monkeypatch.setattr("midas.core.review.WeaviateProjector", FakeWeaviateProjector)
-    monkeypatch.setattr("midas.core.review.GraphProjector", InsightGraphProjector)
     monkeypatch.setattr("midas.core.insights.WeaviateProjector", FakeWeaviateProjector)
     monkeypatch.setattr("midas.core.insights.GraphProjector", InsightGraphProjector)
     monkeypatch.setenv("MIDAS_AUTO_PROJECT", "0")
 
-    access_token = register_user("insights@example.com")
+    email = "insights@example.com"
+    access_token = register_user(email)
+    promote_user_to_pro(email)
+    get_registry().set_capability("advanced_analytics", True)
     create_entry(access_token, "I felt anxious about the launch after coffee and a high sugar day.")
     create_entry(access_token, "I spent time with Torian, and the launch was blocked by poor sleep.")
 

@@ -281,8 +281,6 @@ export interface WeeklyReviewResponse {
   findings: ReviewFindingResponse[];
   stats: ReviewStatResponse[];
   entries: JournalEntryResponse[];
-  memory_highlights: WeaviateArtifactResponse[];
-  graph: GraphObservationResponse;
   clarifications: ClarificationTaskResponse[];
   warnings: string[];
 }

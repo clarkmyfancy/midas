@@ -53,7 +53,7 @@ _checkpointer = None
 
 
 def resolve_habit_analyst_model(registry: CapabilityRegistry) -> str:
-    return "gpt-4o" if registry.is_pro_enabled("pro_analytics") else "gpt-4o-mini"
+    return "gpt-4o" if registry.is_pro_enabled("advanced_analytics") else "gpt-4o-mini"
 
 
 def create_habit_analyst_chain(model: str) -> ChatOpenAI:

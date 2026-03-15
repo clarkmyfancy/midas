@@ -3,16 +3,13 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
 
 from midas.core.memory import (
-    JournalEntryRecord,
     ClarificationTaskRecord,
+    JournalEntryRecord,
     list_clarification_tasks_for_user,
     list_journal_entries_for_user,
-    list_projection_jobs_for_user,
 )
-from midas.core.projections import GraphProjector, WeaviateProjector
 
 
 WEAVIATE_REVIEW_PREFERENCE = {
@@ -44,21 +41,8 @@ class WeeklyReviewResult:
     findings: list[ReviewFinding]
     stats: list[ReviewStat]
     entries: list[JournalEntryRecord]
-    memory_highlights: list[dict[str, Any]]
-    graph_nodes: list[dict[str, Any]]
-    graph_relationships: list[dict[str, Any]]
     clarifications: list[ClarificationTaskRecord]
     warnings: list[str]
-
-
-def _display_name(node: dict[str, Any]) -> str:
-    properties = dict(node.get("properties", {}))
-    return (
-        str(properties.get("display_name"))
-        or str(properties.get("canonical_name"))
-        or str(properties.get("summary"))
-        or str(node.get("id", ""))
-    )
 
 
 def _format_average(values: list[float], suffix: str) -> str:
@@ -67,90 +51,17 @@ def _format_average(values: list[float], suffix: str) -> str:
     return f"{sum(values) / len(values):.1f}{suffix}"
 
 
-def _relationship_confidence(relationship: dict[str, Any]) -> float | None:
-    properties = dict(relationship.get("properties", {}))
-    raw_value = properties.get("confidence")
-    if raw_value is None:
-        return None
-    try:
-        return float(raw_value)
-    except (TypeError, ValueError):
-        return None
-
-
-def build_weekly_review(*, user_id: str, window_days: int = 7, confidence_threshold: float = 0.65) -> WeeklyReviewResult:
+def build_weekly_review(*, user_id: str, window_days: int = 7) -> WeeklyReviewResult:
     generated_at = datetime.now(UTC)
     cutoff = generated_at - timedelta(days=window_days)
     all_entries = list_journal_entries_for_user(user_id)
     entries = [entry for entry in all_entries if entry.created_at >= cutoff]
     warnings: list[str] = []
 
-    weaviate = WeaviateProjector()
-    graph = GraphProjector()
-
-    memory_highlights: list[dict[str, Any]] = []
-    graph_nodes: dict[str, dict[str, Any]] = {}
-    graph_relationships: dict[str, dict[str, Any]] = {}
-
-    for entry in entries:
-        jobs = list_projection_jobs_for_user(user_id, source_record_id=entry.id)
-        preferred_artifact: dict[str, Any] | None = None
-        preferred_rank = 10**6
-        for job in jobs:
-            if not job.projection_type.startswith("weaviate_") or job.status != "completed":
-                continue
-            artifact = weaviate.fetch_object(job.id)
-            if artifact is None:
-                warnings.append(f"Weaviate artifact missing for {job.id}")
-                continue
-            artifact_payload = {
-                "projection_job_id": job.id,
-                "object_id": str(artifact.get("id", job.id)),
-                "class_name": str(artifact.get("class", "")),
-                "content": dict(artifact.get("properties", {})).get("content"),
-                "url": weaviate.object_url(job.id),
-                "raw": artifact,
-            }
-            rank = WEAVIATE_REVIEW_PREFERENCE.get(job.projection_type, 100)
-            if preferred_artifact is None or rank < preferred_rank:
-                preferred_artifact = artifact_payload
-                preferred_rank = rank
-        if preferred_artifact is not None:
-            memory_highlights.append(preferred_artifact)
-
-        try:
-            observation = graph.fetch_observation(entry.id, user_id)
-        except Exception:
-            warnings.append(f"Neo4j observation unavailable for {entry.id}")
-            continue
-
-        for node in observation.get("nodes", []):
-            graph_nodes[str(node.get("id"))] = node
-        for relationship in observation.get("relationships", []):
-            relationship_type = str(relationship.get("type", "")).upper()
-            if relationship_type != "OBSERVED":
-                confidence = _relationship_confidence(relationship)
-                if confidence is not None and confidence < confidence_threshold:
-                    continue
-            graph_relationships[str(relationship.get("id"))] = relationship
-
     clarifications = list_clarification_tasks_for_user(user_id, status="pending")
 
     goal_counter = Counter(goal for entry in entries for goal in entry.goals)
-    memory_counter = Counter(
-        str(dict(artifact.get("raw", {}).get("properties", {})).get("projection_type", "unknown"))
-        for artifact in memory_highlights
-    )
-    relationship_counter = Counter(
-        str(relationship.get("type", "")).lower()
-        for relationship in graph_relationships.values()
-        if str(relationship.get("type", "")).upper() != "OBSERVED"
-    )
-    entity_counter = Counter(
-        _display_name(node)
-        for node in graph_nodes.values()
-        if "Observation" not in node.get("labels", [])
-    )
+    total_goals = sum(len(entry.goals) for entry in entries)
 
     findings: list[ReviewFinding] = []
     if clarifications:
@@ -161,67 +72,61 @@ def build_weekly_review(*, user_id: str, window_days: int = 7, confidence_thresh
                 evidence=[task.prompt for task in clarifications[:3]],
             )
         )
-    if relationship_counter:
-        top_relationship = relationship_counter.most_common(1)[0]
+    if entries:
         findings.append(
             ReviewFinding(
-                title="Recurring pattern",
-                detail=f"Your stored graph most often links recent experiences through '{top_relationship[0].replace('_', ' ')}'.",
-                evidence=[f"{name.replace('_', ' ')}: {count}" for name, count in relationship_counter.most_common(3)],
-            )
-        )
-    if entity_counter:
-        findings.append(
-            ReviewFinding(
-                title="What kept resurfacing",
-                detail="These people, places, or themes appeared most often across the review window.",
-                evidence=[f"{name}: {count} mentions" for name, count in entity_counter.most_common(4)],
+                title="Consistency",
+                detail=f"You captured {len(entries)} entries in the last {window_days} days.",
+                evidence=[
+                    entry.journal_entry
+                    for entry in sorted(entries, key=lambda entry: entry.created_at, reverse=True)[:3]
+                ],
             )
         )
     if goal_counter:
-        top_goals = ", ".join(goal for goal, _count in goal_counter.most_common(3))
         findings.append(
             ReviewFinding(
                 title="Explicit priorities",
-                detail=f"You explicitly named these priorities most often: {top_goals}.",
+                detail="These priorities came up most often in what you wrote down this week.",
                 evidence=[f"{goal}: {count} entries" for goal, count in goal_counter.most_common(3)],
-            )
-        )
-    if entries and not findings:
-        findings.append(
-            ReviewFinding(
-                title="Recent entries",
-                detail=f"There are {len(entries)} entries in the last {window_days} days.",
-                evidence=[entry.journal_entry for entry in entries[:3]],
             )
         )
 
     sleep_values = [entry.sleep_hours for entry in entries if entry.sleep_hours is not None]
     hrv_values = [entry.hrv_ms for entry in entries if entry.hrv_ms is not None]
     step_values = [float(entry.steps) for entry in entries if entry.steps is not None]
+    average_sleep = sum(sleep_values) / len(sleep_values) if sleep_values else None
+    average_hrv = sum(hrv_values) / len(hrv_values) if hrv_values else None
+
+    if average_sleep is not None or average_hrv is not None:
+        biometrics_evidence: list[str] = []
+        if average_sleep is not None:
+            biometrics_evidence.append(f"Average sleep: {average_sleep:.1f}h")
+        if average_hrv is not None:
+            biometrics_evidence.append(f"Average HRV: {average_hrv:.1f}ms")
+        findings.append(
+            ReviewFinding(
+                title="Biometrics snapshot",
+                detail="Your weekly reflection includes the biometrics you logged alongside your entries.",
+                evidence=biometrics_evidence,
+            )
+        )
+
     stats = [
         ReviewStat(label="Entries", value=str(len(entries))),
+        ReviewStat(label="Named goals", value=str(total_goals)),
         ReviewStat(label="Avg sleep", value=_format_average(sleep_values, "h")),
         ReviewStat(label="Avg HRV", value=_format_average(hrv_values, "ms")),
         ReviewStat(label="Avg steps", value=_format_average(step_values, "")),
-        ReviewStat(label="Graph entities", value=str(len([node for node in graph_nodes.values() if "Observation" not in node.get("labels", [])]))),
-        ReviewStat(label="Confidence threshold", value=f"{confidence_threshold:.2f}"),
         ReviewStat(label="Pending clarifications", value=str(len(clarifications))),
     ]
 
-    top_entities = ", ".join(name for name, _count in entity_counter.most_common(3))
     if findings:
         summary_parts = [finding.detail for finding in findings[:3]]
     elif entries:
         summary_parts = [f"You logged {len(entries)} entries in the last {window_days} days."]
     else:
         summary_parts = ["No recent review signals were found yet."]
-    if top_entities:
-        summary_parts.append(f"Most visible entities: {top_entities}.")
-    if memory_counter:
-        summary_parts.append(
-            f"Retrieved memory snapshots: {', '.join(name.replace('_', ' ') for name, _count in memory_counter.most_common(2))}."
-        )
     summary = " ".join(summary_parts)
 
     return WeeklyReviewResult(
@@ -231,9 +136,6 @@ def build_weekly_review(*, user_id: str, window_days: int = 7, confidence_thresh
         findings=findings,
         stats=stats,
         entries=entries,
-        memory_highlights=memory_highlights[:6],
-        graph_nodes=list(graph_nodes.values()),
-        graph_relationships=list(graph_relationships.values()),
         clarifications=clarifications,
         warnings=warnings,
     )

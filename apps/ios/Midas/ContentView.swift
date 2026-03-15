@@ -13,9 +13,8 @@ struct ContentView: View {
     private let reflectionSyncService = ReflectionSyncService()
 
     @State private var capabilityMap: [String: Bool] = [
-        "pro_analytics": false,
+        "advanced_analytics": false,
         "weekly_reflection": false,
-        "mental_model_graph": false,
     ]
     @State private var authMode: AuthMode = .login
     @State private var authSession: AuthSession?
@@ -162,13 +161,23 @@ struct ContentView: View {
                     .padding()
                     .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24))
 
-                    withProGate(capabilityEnabled: capabilityMap["weekly_reflection"] ?? false) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Weekly Reflection")
+                            .font(.headline)
+                        Text("A core weekly summary based on your recent journals, goals, biometrics, and clarifications.")
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20))
+
+                    withProGate(capabilityEnabled: capabilityMap["advanced_analytics"] ?? false) {
                         showingPaywall = true
                     } content: {
                         VStack(alignment: .leading, spacing: 12) {
-                            Text("Weekly Reflection")
+                            Text("Advanced Analytics")
                                 .font(.headline)
-                            Text("A deep weekly coaching summary based on journals, biometrics, and calendar history.")
+                            Text("Longitudinal pattern mining, graph interpretation, and deeper analytics over the same stored data.")
                                 .foregroundStyle(.secondary)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -240,9 +249,8 @@ struct ContentView: View {
         guard let currentSession = authSession else {
             await MainActor.run {
                 capabilityMap = [
-                    "pro_analytics": false,
+                    "advanced_analytics": false,
                     "weekly_reflection": false,
-                    "mental_model_graph": false,
                 ]
             }
             return
@@ -355,9 +363,8 @@ struct ContentView: View {
     private func logoutLocally(status: String) {
         authSession = nil
         capabilityMap = [
-            "pro_analytics": false,
+            "advanced_analytics": false,
             "weekly_reflection": false,
-            "mental_model_graph": false,
         ]
         reflectionSummary = ""
         healthSummary = nil
