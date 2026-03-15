@@ -508,6 +508,7 @@ def memory_settings() -> MemorySettingsResponse:
 @app.get("/api/v1/review", response_model=WeeklyReviewResponse)
 @app.get("/v1/review", response_model=WeeklyReviewResponse)
 def get_weekly_review(
+    _: Annotated[None, Depends(requires_entitlement("weekly_reflection"))],
     user: Annotated[AuthUser, Depends(get_current_user)],
     window_days: int = 7,
     confidence_threshold: float = 0.65,
@@ -549,6 +550,7 @@ def get_weekly_review(
 @app.get("/api/v1/insights", response_model=InsightsResponse)
 @app.get("/v1/insights", response_model=InsightsResponse)
 def get_insights(
+    _: Annotated[None, Depends(requires_entitlement("mental_model_graph"))],
     user: Annotated[AuthUser, Depends(get_current_user)],
     window_days: int = 30,
     confidence_threshold: float = 0.65,

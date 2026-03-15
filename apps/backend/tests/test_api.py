@@ -5,6 +5,7 @@ from app.main import app
 from midas.core import entitlements as entitlements_module
 from midas.core.loader import load_capabilities
 from midas.core.memory import init_memory_storage, reset_memory_storage_for_tests
+from midas.core.registry import get_registry
 from midas.core.entitlements import init_auth_storage, reset_auth_storage_for_tests
 from midas.core import memory as memory_module
 from midas.core.projections import (
@@ -374,3 +375,53 @@ def test_pro_route_requires_installed_capability() -> None:
     )
 
     assert response.status_code in {403, 503}
+
+
+def test_review_route_requires_weekly_reflection_entitlement() -> None:
+    load_capabilities(force=True)
+    access_token = register_and_login()
+
+    response = client.get(
+        "/v1/review",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+
+    assert response.status_code == 503
+
+
+def test_review_route_rejects_core_users_when_weekly_reflection_is_installed() -> None:
+    load_capabilities(force=True)
+    get_registry().set_capability("weekly_reflection", True)
+    access_token = register_and_login()
+
+    response = client.get(
+        "/v1/review",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+
+    assert response.status_code == 403
+
+
+def test_insights_route_requires_mental_model_graph_entitlement() -> None:
+    load_capabilities(force=True)
+    access_token = register_and_login()
+
+    response = client.get(
+        "/v1/insights",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+
+    assert response.status_code == 503
+
+
+def test_insights_route_rejects_core_users_when_mental_model_graph_is_installed() -> None:
+    load_capabilities(force=True)
+    get_registry().set_capability("mental_model_graph", True)
+    access_token = register_and_login()
+
+    response = client.get(
+        "/v1/insights",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+
+    assert response.status_code == 403
