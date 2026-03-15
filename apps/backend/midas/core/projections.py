@@ -360,6 +360,13 @@ CURRENT_USER_REFERENCES = {
     "myself",
     "self",
 }
+PERSON_PLACEHOLDER_REFERENCES = {
+    "unknown",
+    "unnamed",
+    "author",
+    "user",
+    "journal author",
+}
 PERSON_STOPWORDS = {"After", "Before", "When", "While", "Because", "Later", "Then", "Today", "Yesterday", "Sometimes"}
 SUMMARY_NOISE_TOKENS = {"sometimes", "something", "someone", "everything", "nothing"}
 KINSHIP_TITLES = {
@@ -467,6 +474,10 @@ def display_name_from_canonical(value: str) -> str:
 
 def is_current_user_reference(value: str) -> bool:
     return normalize_name(value) in CURRENT_USER_REFERENCES
+
+
+def is_placeholder_person_reference(value: str) -> bool:
+    return normalize_name(value) in {normalize_name(item) for item in PERSON_PLACEHOLDER_REFERENCES}
 
 
 def canonicalize_entity(
@@ -1368,11 +1379,31 @@ def heuristic_extract_graph(entry: JournalEntryRecord) -> GraphExtraction:
 def normalize_extraction(entry: JournalEntryRecord, extraction: GraphExtraction) -> GraphExtraction:
     normalized_entities: dict[tuple[str, str], ExtractedEntity] = {}
     canonical_name_map: dict[str, str] = {}
+    has_first_person_reference = bool(re.search(r"\b(i|me|my|mine|myself)\b", entry.journal_entry.lower()))
 
     for entity in extraction.entities:
+        original_entity_name = entity.name
+        original_entity_canonical_name = entity.canonical_name
         entity_type = sanitize_entity_type(entity.entity_type)
         if entity_type is None:
             continue
+        if entity_type == "person" and (
+            is_placeholder_person_reference(entity.name)
+            or is_placeholder_person_reference(entity.canonical_name)
+        ):
+            if not has_first_person_reference:
+                continue
+            entity = ExtractedEntity(
+                entity_type="person",
+                name="I",
+                canonical_name=CURRENT_USER_CANONICAL_NAME,
+                confidence=max(entity.confidence, 0.9),
+                evidence="Normalized placeholder author reference to the current user because the journal entry is first-person.",
+                aliases=["I", entity.name],
+                needs_clarification=False,
+                resolution_notes=None,
+                candidate_canonical_name=None,
+            )
         canonical_name, aliases, needs_clarification, resolution_notes, candidate_canonical_name = canonicalize_entity(
             entry.user_id,
             entity_type,
@@ -1413,8 +1444,23 @@ def normalize_extraction(entry: JournalEntryRecord, extraction: GraphExtraction)
                 resolution_notes=current.resolution_notes or normalized_entity.resolution_notes,
                 candidate_canonical_name=current.candidate_canonical_name or normalized_entity.candidate_canonical_name,
             )
+        canonical_name_map[original_entity_canonical_name] = canonical_name
+        canonical_name_map[normalize_name(original_entity_name)] = canonical_name
         canonical_name_map[entity.canonical_name] = canonical_name
         canonical_name_map[normalize_name(entity.name)] = canonical_name
+
+    if has_first_person_reference and ("person", CURRENT_USER_CANONICAL_NAME) not in normalized_entities:
+        normalized_entities[("person", CURRENT_USER_CANONICAL_NAME)] = ExtractedEntity(
+            entity_type="person",
+            name="Self",
+            canonical_name=CURRENT_USER_CANONICAL_NAME,
+            confidence=0.98,
+            evidence="Added current user entity from first-person journal language.",
+            aliases=["I", "me", "my", "self"],
+            needs_clarification=False,
+            resolution_notes=None,
+            candidate_canonical_name=None,
+        )
 
     known_canonical_names = {entity.canonical_name for entity in normalized_entities.values()}
     entity_type_by_canonical_name = {
@@ -1568,6 +1614,8 @@ def extract_graph_with_model(entry: JournalEntryRecord) -> GraphExtraction:
         [
             "Extract a compact but personally useful knowledge graph from this journal entry.",
             "Use only entity types: person, organization, place, context, mood, project, habit, goal, intake, health_state.",
+            "First-person pronouns always refer to the journal author and should map to the current user, not to an unknown person.",
+            "Never create person entities named unknown, unnamed, author, or user.",
             "Use organization for companies, teams, employers, clients, or institutions when they are not the project itself.",
             "Use intake for consumed or body-input items like alcohol, weed, caffeine, medication, or high-sugar days.",
             "Prefer specific relationships over generic ones.",
@@ -1852,6 +1900,15 @@ class GraphProjector:
                 continue
             raw_name = entity.name
             candidate_canonical_name = entity.candidate_canonical_name or entity.canonical_name
+            if (
+                entity.entity_type == "person"
+                and (
+                    is_placeholder_person_reference(raw_name)
+                    or is_placeholder_person_reference(candidate_canonical_name)
+                    or entity.canonical_name == CURRENT_USER_CANONICAL_NAME
+                )
+            ):
+                continue
             candidate_display_name = display_name_from_canonical(candidate_canonical_name).title()
             create_clarification_task_for_user(
                 user_id=entry.user_id,

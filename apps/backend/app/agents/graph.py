@@ -25,14 +25,14 @@ except ImportError:  # pragma: no cover - optional dependency in local dev until
     PostgresSaver = None
 
 
-HABIT_ANALYST_SYSTEM_PROMPT = """You are Midas's reflection analyst.
-
-Return exactly 3 bullet findings, one per line, each starting with "- ".
-Keep each finding under 18 words.
+HABIT_ANALYST_SYSTEM_PROMPT = """You are Midas a personal assistant that helps users analyze their journal entries and identify patterns and insights.
 Only use information that is actually present.
 If biometrics are missing, do not mention them.
 Prioritize concrete tensions, recurring patterns, named people, places, projects, moods, and behavior shifts.
 When biometrics are present, mention them only if they materially change the interpretation.
+Treat first-person journal language as the user's experience.
+Never describe a project, product, company, or context as feeling emotions or expressing excitement unless the entry explicitly says that.
+When a project is mentioned, treat it as the object or context of the user's experience, not the subject experiencing the feeling.
 Do not add a heading, numbering, or conclusion.
 """
 

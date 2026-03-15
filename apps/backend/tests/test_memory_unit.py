@@ -690,6 +690,65 @@ def test_normalize_extraction_rewrites_generic_about_relationships_to_specific_s
     assert ("self", "midas", "worked_on") in relationship_types
 
 
+def test_normalize_extraction_replaces_placeholder_author_person_with_self() -> None:
+    entry, _ = MemoryMemoryStore().create_journal_entry(
+        user_id="user-1",
+        journal_entry="i'm feeling pretty pumped because this is set up and working on local now!",
+        goals=[],
+        thread_id=None,
+        steps=None,
+        sleep_hours=None,
+        hrv_ms=None,
+        source="manual",
+    )
+    extraction = GraphExtraction(
+        summary="placeholder author graph",
+        entities=[
+            ExtractedEntity(
+                entity_type="person",
+                name="unknown",
+                canonical_name="unknown",
+                confidence=0.5,
+                evidence="The author is not named, so the person entity is marked as unknown.",
+                aliases=["unknown"],
+                needs_clarification=True,
+                resolution_notes="The author is not named, so the person entity is marked as unknown.",
+                candidate_canonical_name="unknown",
+            ),
+            ExtractedEntity(
+                entity_type="mood",
+                name="pumped",
+                canonical_name="pumped",
+                confidence=0.88,
+                evidence="Mood in entry.",
+                aliases=["pumped"],
+            ),
+        ],
+        relationships=[
+            ExtractedRelationship(
+                source_canonical_name="unknown",
+                target_canonical_name="pumped",
+                relationship_type="experienced",
+                confidence=0.6,
+                evidence="Placeholder author experienced pumped.",
+                extraction_source="model",
+            )
+        ],
+    )
+
+    normalized = normalize_extraction(entry, extraction)
+    person_entities = [entity for entity in normalized.entities if entity.entity_type == "person"]
+    relationship_types = {
+        (relationship.source_canonical_name, relationship.target_canonical_name, relationship.relationship_type)
+        for relationship in normalized.relationships
+    }
+
+    assert len(person_entities) == 1
+    assert person_entities[0].canonical_name == "self"
+    assert person_entities[0].needs_clarification is False
+    assert ("self", "pumped", "experienced") in relationship_types
+
+
 def test_normalize_extraction_adds_followed_for_explicit_project_chronology() -> None:
     entry, _ = MemoryMemoryStore().create_journal_entry(
         user_id="user-1",
@@ -822,6 +881,52 @@ def test_prepare_extraction_flags_typo_like_person_match_for_clarification(monke
     assert prepared.entities[0].needs_clarification is True
     assert prepared.entities[0].candidate_canonical_name == "torian"
     assert prepared.entities[0].confidence < 0.91
+
+
+def test_graph_projector_skips_placeholder_author_clarification_tasks(monkeypatch) -> None:
+    store = MemoryMemoryStore()
+    entry, jobs = store.create_journal_entry(
+        user_id="user-1",
+        journal_entry="i'm feeling pretty pumped because this is set up and working on local now!",
+        goals=[],
+        thread_id=None,
+        steps=None,
+        sleep_hours=None,
+        hrv_ms=None,
+        source="manual",
+    )
+    graph_job = next(job for job in jobs if job.projection_type == "neo4j_knowledge_graph")
+    projector = GraphProjector(base_url="http://127.0.0.1:7474")
+    extraction = GraphExtraction(
+        summary="placeholder author graph",
+        entities=[
+            ExtractedEntity(
+                entity_type="person",
+                name="unknown",
+                canonical_name="unknown",
+                confidence=0.5,
+                evidence="The author is not named, so the person entity is marked as unknown.",
+                aliases=["unknown"],
+                needs_clarification=True,
+                resolution_notes="The author is not named, so the person entity is marked as unknown.",
+                candidate_canonical_name="unknown",
+            )
+        ],
+        relationships=[],
+    )
+    created_tasks: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(projector, "extract", lambda current_entry: extraction)
+    monkeypatch.setattr(projector, "ensure_schema", lambda: None)
+    monkeypatch.setattr(projector, "_query", lambda statement, parameters=None: {})
+    monkeypatch.setattr(
+        "midas.core.projections.create_clarification_task_for_user",
+        lambda **kwargs: created_tasks.append((kwargs["raw_name"], kwargs["candidate_canonical_name"])),
+    )
+
+    projector.project(graph_job, entry)
+
+    assert created_tasks == []
 
 
 def test_prepare_extraction_merges_current_user_aliases_without_clarification() -> None:
