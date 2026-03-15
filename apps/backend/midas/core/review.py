@@ -67,7 +67,18 @@ def _format_average(values: list[float], suffix: str) -> str:
     return f"{sum(values) / len(values):.1f}{suffix}"
 
 
-def build_weekly_review(*, user_id: str, window_days: int = 7) -> WeeklyReviewResult:
+def _relationship_confidence(relationship: dict[str, Any]) -> float | None:
+    properties = dict(relationship.get("properties", {}))
+    raw_value = properties.get("confidence")
+    if raw_value is None:
+        return None
+    try:
+        return float(raw_value)
+    except (TypeError, ValueError):
+        return None
+
+
+def build_weekly_review(*, user_id: str, window_days: int = 7, confidence_threshold: float = 0.65) -> WeeklyReviewResult:
     generated_at = datetime.now(UTC)
     cutoff = generated_at - timedelta(days=window_days)
     all_entries = list_journal_entries_for_user(user_id)
@@ -116,6 +127,11 @@ def build_weekly_review(*, user_id: str, window_days: int = 7) -> WeeklyReviewRe
         for node in observation.get("nodes", []):
             graph_nodes[str(node.get("id"))] = node
         for relationship in observation.get("relationships", []):
+            relationship_type = str(relationship.get("type", "")).upper()
+            if relationship_type != "OBSERVED":
+                confidence = _relationship_confidence(relationship)
+                if confidence is not None and confidence < confidence_threshold:
+                    continue
             graph_relationships[str(relationship.get("id"))] = relationship
 
     clarifications = list_clarification_tasks_for_user(user_id, status="pending")
@@ -189,6 +205,7 @@ def build_weekly_review(*, user_id: str, window_days: int = 7) -> WeeklyReviewRe
         ReviewStat(label="Avg HRV", value=_format_average(hrv_values, "ms")),
         ReviewStat(label="Avg steps", value=_format_average(step_values, "")),
         ReviewStat(label="Graph entities", value=str(len([node for node in graph_nodes.values() if "Observation" not in node.get("labels", [])]))),
+        ReviewStat(label="Confidence threshold", value=f"{confidence_threshold:.2f}"),
         ReviewStat(label="Pending clarifications", value=str(len(clarifications))),
     ]
 

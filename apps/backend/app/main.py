@@ -471,8 +471,13 @@ def memory_settings() -> MemorySettingsResponse:
 def get_weekly_review(
     user: Annotated[AuthUser, Depends(get_current_user)],
     window_days: int = 7,
+    confidence_threshold: float = 0.65,
 ) -> WeeklyReviewResponse:
-    result = build_weekly_review(user_id=user.id, window_days=window_days)
+    result = build_weekly_review(
+        user_id=user.id,
+        window_days=window_days,
+        confidence_threshold=confidence_threshold,
+    )
     return WeeklyReviewResponse(
         summary=result.summary,
         generated_at=result.generated_at,

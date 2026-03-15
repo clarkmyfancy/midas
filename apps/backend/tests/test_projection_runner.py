@@ -382,6 +382,109 @@ def test_review_endpoint_assembles_hybrid_memory_payload(monkeypatch) -> None:
     assert payload["clarifications"]
 
 
+def test_review_endpoint_filters_low_confidence_graph_edges(monkeypatch) -> None:
+    class ReviewFilterGraphProjector(FakeGraphProjector):
+        def project(self, job, entry) -> None:
+            self.observations[(entry.user_id, entry.id)] = {
+                "observation": {
+                    "id": job.id,
+                    "labels": ["Observation"],
+                    "properties": {
+                        "source_record_id": entry.id,
+                        "summary": f"Graph summary for {entry.id}",
+                    },
+                },
+                "nodes": [
+                    {
+                        "id": job.id,
+                        "labels": ["Observation"],
+                        "properties": {"source_record_id": entry.id},
+                    },
+                    {
+                        "id": f"entity-a-{entry.id}",
+                        "labels": ["Entity", "Person"],
+                        "properties": {"canonical_name": "self", "display_name": "Self"},
+                    },
+                    {
+                        "id": f"entity-b-{entry.id}",
+                        "labels": ["Entity", "Mood"],
+                        "properties": {"canonical_name": "anxious", "display_name": "anxious"},
+                    },
+                    {
+                        "id": f"entity-c-{entry.id}",
+                        "labels": ["Entity", "Project"],
+                        "properties": {"canonical_name": "midas", "display_name": "Midas"},
+                    },
+                ],
+                "relationships": [
+                    {
+                        "id": f"rel-observed-{entry.id}",
+                        "type": "OBSERVED",
+                        "startNode": job.id,
+                        "endNode": f"entity-a-{entry.id}",
+                        "properties": {"source_record_id": entry.id, "confidence": 0.9},
+                    },
+                    {
+                        "id": f"rel-high-{entry.id}",
+                        "type": "EXPERIENCED",
+                        "startNode": f"entity-a-{entry.id}",
+                        "endNode": f"entity-b-{entry.id}",
+                        "properties": {"confidence": 0.9, "confidence_bucket": "high", "extraction_source": "model"},
+                    },
+                    {
+                        "id": f"rel-low-{entry.id}",
+                        "type": "WORKED_ON",
+                        "startNode": f"entity-a-{entry.id}",
+                        "endNode": f"entity-c-{entry.id}",
+                        "properties": {"confidence": 0.4, "confidence_bucket": "low", "extraction_source": "heuristic"},
+                    },
+                ],
+            }
+
+    FakeWeaviateProjector.objects = {}
+    ReviewFilterGraphProjector.observations = {}
+    monkeypatch.setattr("midas.core.projections.WeaviateProjector", FakeWeaviateProjector)
+    monkeypatch.setattr("midas.core.projections.GraphProjector", ReviewFilterGraphProjector)
+    monkeypatch.setattr("app.main.WeaviateProjector", FakeWeaviateProjector)
+    monkeypatch.setattr("app.main.GraphProjector", ReviewFilterGraphProjector)
+    monkeypatch.setattr("midas.core.review.WeaviateProjector", FakeWeaviateProjector)
+    monkeypatch.setattr("midas.core.review.GraphProjector", ReviewFilterGraphProjector)
+    monkeypatch.setenv("MIDAS_AUTO_PROJECT", "0")
+
+    access_token = register_user("review-filter@example.com")
+    create_entry(access_token, "I felt anxious working on Midas.")
+
+    run_response = client.post(
+        "/v1/projection-jobs/run?limit=10",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert run_response.status_code == 200
+
+    filtered_response = client.get(
+        "/v1/review?confidence_threshold=0.65",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert filtered_response.status_code == 200
+    filtered_relationships = [
+        relationship
+        for relationship in filtered_response.json()["graph"]["relationships"]
+        if relationship["type"] != "OBSERVED"
+    ]
+    assert [relationship["type"] for relationship in filtered_relationships] == ["EXPERIENCED"]
+
+    unfiltered_response = client.get(
+        "/v1/review?confidence_threshold=0.0",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert unfiltered_response.status_code == 200
+    unfiltered_relationships = [
+        relationship
+        for relationship in unfiltered_response.json()["graph"]["relationships"]
+        if relationship["type"] != "OBSERVED"
+    ]
+    assert {relationship["type"] for relationship in unfiltered_relationships} == {"EXPERIENCED", "WORKED_ON"}
+
+
 def test_resolving_clarification_reprojects_weaviate_and_graph_artifacts(monkeypatch) -> None:
     FakeWeaviateProjector.objects = {}
     TrackingGraphProjector.observations = {}

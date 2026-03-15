@@ -22,6 +22,29 @@ function relationshipLabel(relationship: GraphRelationshipResponse) {
   return relationship.type.toLowerCase().replaceAll("_", " ");
 }
 
+function relationshipConfidenceBucket(relationship: GraphRelationshipResponse) {
+  const bucket = relationship.properties.confidence_bucket;
+  return typeof bucket === "string" && bucket ? bucket : "unknown";
+}
+
+function relationshipProvenance(relationship: GraphRelationshipResponse) {
+  const provenance = relationship.properties.extraction_source;
+  return typeof provenance === "string" && provenance ? provenance : "unknown";
+}
+
+const CONFIDENCE_OPTIONS = [
+  { label: "Low+", value: 0 },
+  { label: "Medium+", value: 0.65 },
+  { label: "High", value: 0.85 },
+] as const;
+
+const PROVENANCE_OPTIONS = [
+  { label: "All edges", value: "all" },
+  { label: "Model", value: "model" },
+  { label: "Heuristic", value: "heuristic" },
+  { label: "Normalized", value: "normalized" },
+] as const;
+
 export function ReviewPageShell() {
   const router = useRouter();
   const { isReady, logout, session } = useAuth();
@@ -30,6 +53,8 @@ export function ReviewPageShell() {
   const [success, setSuccess] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [resolvingTaskId, setResolvingTaskId] = useState<string | null>(null);
+  const [confidenceThreshold, setConfidenceThreshold] = useState<number>(0.65);
+  const [provenanceFilter, setProvenanceFilter] = useState<(typeof PROVENANCE_OPTIONS)[number]["value"]>("all");
 
   useEffect(() => {
     if (isReady && !session) {
@@ -37,7 +62,7 @@ export function ReviewPageShell() {
     }
   }, [isReady, router, session]);
 
-  async function loadReview() {
+  async function loadReview(selectedThreshold = confidenceThreshold) {
     if (!session) {
       return;
     }
@@ -45,7 +70,7 @@ export function ReviewPageShell() {
     setIsLoading(true);
     setError(null);
     try {
-      const payload = await getWeeklyReview(session.accessToken, 7);
+      const payload = await getWeeklyReview(session.accessToken, 7, selectedThreshold);
       setReview(payload);
     } catch (caughtError) {
       if (caughtError instanceof ApiError && caughtError.status === 401) {
@@ -64,7 +89,7 @@ export function ReviewPageShell() {
       void loadReview();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session]);
+  }, [session, confidenceThreshold]);
 
   useEffect(() => {
     if (!success) {
@@ -84,7 +109,7 @@ export function ReviewPageShell() {
     setSuccess(null);
     try {
       const response = await resolveClarification(session.accessToken, taskId, { resolution });
-      await loadReview();
+      await loadReview(confidenceThreshold);
       setSuccess(
         response.refresh_message ||
           "Clarification saved. Future memory extraction will use this resolution.",
@@ -97,7 +122,15 @@ export function ReviewPageShell() {
   }
 
   const graphNodes = review?.graph.nodes.filter((node) => !node.labels.includes("Observation")) ?? [];
-  const graphRelationships = review?.graph.relationships.filter((relationship) => relationship.type !== "OBSERVED") ?? [];
+  const graphRelationships = (review?.graph.relationships ?? []).filter((relationship) => {
+    if (relationship.type === "OBSERVED") {
+      return false;
+    }
+    if (provenanceFilter === "all") {
+      return true;
+    }
+    return relationshipProvenance(relationship) === provenanceFilter;
+  });
 
   return (
     <main className="page review-page">
@@ -112,7 +145,7 @@ export function ReviewPageShell() {
           <span className={`status-pill ${isLoading ? "status-pill-live" : ""}`}>
             {isLoading ? "Refreshing..." : "Ready"}
           </span>
-          <button className="ghost-button" onClick={() => void loadReview()} type="button">
+          <button className="ghost-button" onClick={() => void loadReview(confidenceThreshold)} type="button">
             Refresh
           </button>
         </div>
@@ -207,6 +240,36 @@ export function ReviewPageShell() {
 
         <section className="panel review-graph-panel">
           <h2>Graph snapshot</h2>
+          <div className="review-graph-controls">
+            <label className="review-filter">
+              <span>Confidence</span>
+              <select
+                className="input review-filter-select"
+                onChange={(event) => setConfidenceThreshold(Number(event.target.value))}
+                value={confidenceThreshold}
+              >
+                {CONFIDENCE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="review-filter">
+              <span>Provenance</span>
+              <select
+                className="input review-filter-select"
+                onChange={(event) => setProvenanceFilter(event.target.value as (typeof PROVENANCE_OPTIONS)[number]["value"])}
+                value={provenanceFilter}
+              >
+                {PROVENANCE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
           <div className="review-graph-grid">
             <div className="review-graph-column">
               <h3>Entities</h3>
@@ -223,11 +286,23 @@ export function ReviewPageShell() {
               <h3>Relationships</h3>
               <div className="review-relationship-list">
                 {graphRelationships.map((relationship) => (
-                  <article className="review-relationship-card" key={relationship.relationship_id}>
+                  <article
+                    className={`review-relationship-card review-relationship-card-${relationshipProvenance(relationship)}`}
+                    key={relationship.relationship_id}
+                  >
                     <strong>{relationshipLabel(relationship)}</strong>
+                    <div className="review-relationship-badges">
+                      <span className={`review-badge review-badge-${relationshipConfidenceBucket(relationship)}`}>
+                        {relationshipConfidenceBucket(relationship)}
+                      </span>
+                      <span className={`review-badge review-badge-${relationshipProvenance(relationship)}`}>
+                        {relationshipProvenance(relationship)}
+                      </span>
+                    </div>
                     <span>{relationship.properties.evidence ? String(relationship.properties.evidence) : "Derived graph relation"}</span>
                   </article>
                 ))}
+                {!graphRelationships.length ? <div className="memory-empty">No graph relationships match the current filters.</div> : null}
               </div>
             </div>
           </div>

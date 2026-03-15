@@ -581,8 +581,97 @@ h2 {
   line-height: 1.6;
 }
 
+.review-graph-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.review-filter {
+  display: grid;
+  gap: 6px;
+  min-width: 180px;
+}
+
+.review-filter span {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.review-filter-select {
+  min-height: 46px;
+}
+
 .review-graph-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.review-relationship-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.review-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.review-badge-high {
+  background: rgba(31, 107, 84, 0.12);
+  color: #1f6b54;
+}
+
+.review-badge-medium {
+  background: rgba(195, 132, 35, 0.14);
+  color: #8a5c12;
+}
+
+.review-badge-low {
+  background: rgba(154, 39, 22, 0.12);
+  color: #8f2411;
+}
+
+.review-badge-model {
+  background: rgba(32, 83, 117, 0.12);
+  color: #205375;
+}
+
+.review-badge-heuristic {
+  background: rgba(108, 73, 143, 0.12);
+  color: #6c498f;
+}
+
+.review-badge-normalized {
+  background: rgba(71, 99, 57, 0.12);
+  color: #476339;
+}
+
+.review-badge-unknown {
+  background: rgba(88, 88, 88, 0.12);
+  color: #585858;
+}
+
+.review-relationship-card-heuristic {
+  border-color: rgba(108, 73, 143, 0.22);
+}
+
+.review-relationship-card-model {
+  border-color: rgba(32, 83, 117, 0.2);
+}
+
+.review-relationship-card-normalized {
+  border-color: rgba(71, 99, 57, 0.22);
 }
 
 .review-entries-panel {

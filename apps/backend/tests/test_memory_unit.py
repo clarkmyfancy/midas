@@ -12,6 +12,7 @@ from midas.core.projections import (
     GraphProjector,
     WEAVIATE_CLASS_PROPERTIES,
     build_weaviate_projection_payload,
+    confidence_bucket_for_confidence,
     extract_graph,
     heuristic_extract_graph,
     normalize_extraction,
@@ -76,6 +77,7 @@ def test_weaviate_schema_uses_date_and_filterable_metadata_defaults() -> None:
 
     assert properties_by_name["created_at"]["dataType"] == ["date"]
     assert properties_by_name["created_at"]["indexFilterable"] is True
+    assert properties_by_name["intakes"]["indexSearchable"] is False
     assert properties_by_name["user_id"]["indexSearchable"] is False
     assert properties_by_name["source_record_id"]["indexSearchable"] is False
     assert properties_by_name["projection_type"]["indexSearchable"] is False
@@ -259,6 +261,49 @@ def test_weaviate_projection_payload_uses_shared_model_extraction_for_organizati
     assert "openai" in semantic_properties["canonical_entities"]
     assert "OpenAI" in semantic_content
     assert "OpenAI" in semantic_embedding_text
+
+
+def test_weaviate_projection_payload_includes_intakes() -> None:
+    store = MemoryMemoryStore()
+    entry, jobs = store.create_journal_entry(
+        user_id="user-1",
+        journal_entry="I felt wired after coffee and a high sugar day.",
+        goals=[],
+        thread_id="dashboard-chat",
+        steps=None,
+        sleep_hours=None,
+        hrv_ms=None,
+        source="reflection_api",
+    )
+    semantic_job = next(job for job in jobs if job.projection_type == WEAVIATE_SEMANTIC_SUMMARY_PROJECTION)
+
+    semantic_content, semantic_embedding_text, semantic_properties = build_weaviate_projection_payload(semantic_job, entry)
+
+    assert set(semantic_properties["intakes"]) >= {"coffee", "high sugar"}
+    assert "coffee" in semantic_embedding_text.lower()
+    assert "Intake signal:" in semantic_content
+
+
+def test_heuristic_graph_extractor_does_not_promote_project_name_to_person_without_person_context() -> None:
+    entry, _ = MemoryMemoryStore().create_journal_entry(
+        user_id="user-1",
+        journal_entry="I felt anxious about Midas after coffee.",
+        goals=[],
+        thread_id=None,
+        steps=None,
+        sleep_hours=None,
+        hrv_ms=None,
+        source="manual",
+    )
+
+    extraction = heuristic_extract_graph(entry)
+    person_names = {
+        entity.canonical_name
+        for entity in extraction.entities
+        if entity.entity_type == "person"
+    }
+
+    assert person_names == {"self"}
 
 
 def test_memory_store_filters_jobs_by_user_and_source_record() -> None:
@@ -481,6 +526,220 @@ def test_heuristic_graph_extractor_normalizes_first_person_to_self() -> None:
         relationship.source_canonical_name == "self" and relationship.target_canonical_name == "anxious"
         for relationship in extraction.relationships
     )
+
+
+def test_heuristic_graph_extractor_prefers_experienced_interacted_with_and_worked_on() -> None:
+    entry, _ = MemoryMemoryStore().create_journal_entry(
+        user_id="user-1",
+        journal_entry="I felt pumped working on Midas with Torian.",
+        goals=[],
+        thread_id=None,
+        steps=None,
+        sleep_hours=None,
+        hrv_ms=None,
+        source="manual",
+    )
+
+    extraction = heuristic_extract_graph(entry)
+    relationship_types = {
+        (relationship.source_canonical_name, relationship.target_canonical_name, relationship.relationship_type)
+        for relationship in extraction.relationships
+    }
+
+    assert ("self", "pumped", "experienced") in relationship_types
+    assert ("self", "torian", "interacted_with") in relationship_types
+    assert ("self", "midas", "worked_on") in relationship_types
+    assert ("torian", "midas", "worked_on") in relationship_types
+
+
+def test_heuristic_graph_extractor_adds_intake_felt_about_blocked_by_and_spent_time_with() -> None:
+    entry, _ = MemoryMemoryStore().create_journal_entry(
+        user_id="user-1",
+        journal_entry=(
+            "I felt anxious about the launch after coffee and a high sugar day. "
+            "I spent time with Torian, and the launch was blocked by poor sleep."
+        ),
+        goals=[],
+        thread_id=None,
+        steps=None,
+        sleep_hours=5.3,
+        hrv_ms=None,
+        source="manual",
+    )
+
+    extraction = heuristic_extract_graph(entry)
+    relationship_types = {
+        (relationship.source_canonical_name, relationship.target_canonical_name, relationship.relationship_type)
+        for relationship in extraction.relationships
+    }
+    intake_entities = {
+        (entity.entity_type, entity.canonical_name)
+        for entity in extraction.entities
+    }
+
+    assert ("intake", "coffee") in intake_entities
+    assert ("intake", "high_sugar") in intake_entities
+    assert ("self", "coffee", "consumed") in relationship_types
+    assert ("self", "high_sugar", "consumed") in relationship_types
+    assert ("self", "launch", "felt_about") in relationship_types
+    assert ("self", "torian", "spent_time_with") in relationship_types
+    assert ("launch", "poor_sleep", "blocked_by") in relationship_types
+
+
+def test_heuristic_graph_extractor_adds_avoided_for_restraint_around_intakes() -> None:
+    entry, _ = MemoryMemoryStore().create_journal_entry(
+        user_id="user-1",
+        journal_entry="I stayed sober and avoided alcohol after the party.",
+        goals=[],
+        thread_id=None,
+        steps=None,
+        sleep_hours=None,
+        hrv_ms=None,
+        source="manual",
+    )
+
+    extraction = heuristic_extract_graph(entry)
+    relationship_types = {
+        (relationship.source_canonical_name, relationship.target_canonical_name, relationship.relationship_type)
+        for relationship in extraction.relationships
+    }
+
+    assert ("self", "alcohol", "avoided") in relationship_types
+
+
+def test_normalize_extraction_rewrites_generic_about_relationships_to_specific_semantics() -> None:
+    entry, _ = MemoryMemoryStore().create_journal_entry(
+        user_id="user-1",
+        journal_entry="I felt pumped working on Midas with Torian.",
+        goals=[],
+        thread_id=None,
+        steps=None,
+        sleep_hours=None,
+        hrv_ms=None,
+        source="manual",
+    )
+    extraction = GraphExtraction(
+        summary="generic graph",
+        entities=[
+            ExtractedEntity(
+                entity_type="person",
+                name="I",
+                canonical_name="self",
+                confidence=0.9,
+                evidence="Self.",
+                aliases=["I"],
+            ),
+            ExtractedEntity(
+                entity_type="person",
+                name="Torian",
+                canonical_name="torian",
+                confidence=0.9,
+                evidence="Person.",
+                aliases=["Torian"],
+            ),
+            ExtractedEntity(
+                entity_type="mood",
+                name="pumped",
+                canonical_name="pumped",
+                confidence=0.9,
+                evidence="Mood.",
+                aliases=["pumped"],
+            ),
+            ExtractedEntity(
+                entity_type="project",
+                name="Midas",
+                canonical_name="midas",
+                confidence=0.9,
+                evidence="Project.",
+                aliases=["Midas"],
+            ),
+        ],
+        relationships=[
+            ExtractedRelationship(
+                source_canonical_name="self",
+                target_canonical_name="pumped",
+                relationship_type="about",
+                confidence=0.8,
+                evidence="Generic model link.",
+            ),
+            ExtractedRelationship(
+                source_canonical_name="self",
+                target_canonical_name="torian",
+                relationship_type="about",
+                confidence=0.8,
+                evidence="Generic model link.",
+            ),
+            ExtractedRelationship(
+                source_canonical_name="self",
+                target_canonical_name="midas",
+                relationship_type="about",
+                confidence=0.8,
+                evidence="Generic model link.",
+            ),
+        ],
+    )
+
+    normalized = normalize_extraction(entry, extraction)
+    relationship_types = {
+        (relationship.source_canonical_name, relationship.target_canonical_name, relationship.relationship_type)
+        for relationship in normalized.relationships
+    }
+
+    assert ("self", "pumped", "experienced") in relationship_types
+    assert ("self", "torian", "interacted_with") in relationship_types
+    assert ("self", "midas", "worked_on") in relationship_types
+
+
+def test_normalize_extraction_adds_followed_for_explicit_project_chronology() -> None:
+    entry, _ = MemoryMemoryStore().create_journal_entry(
+        user_id="user-1",
+        journal_entry=(
+            "this project refers to Midas and the last project refers to thrivesight"
+        ),
+        goals=[],
+        thread_id="dashboard-chat",
+        steps=None,
+        sleep_hours=None,
+        hrv_ms=None,
+        source="reflection_api",
+    )
+    extraction = GraphExtraction(
+        summary="midas and thrivesight relationship",
+        entities=[
+            ExtractedEntity(
+                entity_type="project",
+                name="Midas",
+                canonical_name="midas",
+                confidence=0.95,
+                evidence="Current project alias.",
+                aliases=["Midas"],
+            ),
+            ExtractedEntity(
+                entity_type="project",
+                name="thrivesight",
+                canonical_name="thrivesight",
+                confidence=0.95,
+                evidence="Last project alias.",
+                aliases=["thrivesight"],
+            ),
+        ],
+        relationships=[],
+    )
+
+    normalized = normalize_extraction(entry, extraction)
+    relationship_types = {
+        (relationship.source_canonical_name, relationship.target_canonical_name, relationship.relationship_type)
+        for relationship in normalized.relationships
+    }
+
+    assert ("thrivesight", "midas", "precedes") in relationship_types
+    assert ("midas", "thrivesight", "followed") in relationship_types
+
+
+def test_confidence_bucket_for_confidence_uses_low_medium_high() -> None:
+    assert confidence_bucket_for_confidence(0.91) == "high"
+    assert confidence_bucket_for_confidence(0.7) == "medium"
+    assert confidence_bucket_for_confidence(0.4) == "low"
 
 
 def test_clarification_resolution_guides_future_alias_handling() -> None:

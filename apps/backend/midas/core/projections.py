@@ -37,37 +37,46 @@ GRAPH_ENTITY_LABELS = {
     "goal": "Goal",
     "habit": "Habit",
     "health_state": "HealthState",
+    "intake": "Intake",
     "mood": "Mood",
     "organization": "Organization",
     "person": "Person",
     "place": "Place",
     "project": "Project",
-    "substance": "Substance",
 }
 ALLOWED_ENTITY_TYPES = {
     "context",
     "goal",
     "habit",
     "health_state",
+    "intake",
     "mood",
     "organization",
     "person",
     "place",
     "project",
-    "substance",
 }
 ALLOWED_RELATIONSHIPS = {
     "affected",
-    "supported",
-    "conflicts_with",
-    "led_up_to",
-    "triggered_by",
-    "precedes",
-    "causes",
-    "recurs",
     "about",
+    "blocked_by",
+    "causes",
+    "conflicts_with",
+    "consumed",
     "contributed_to",
+    "avoided",
     "experienced",
+    "felt_about",
+    "followed",
+    "interacted_with",
+    "led_up_to",
+    "precedes",
+    "recurs",
+    "spent_time_with",
+    "supported",
+    "triggered_by",
+    "used",
+    "worked_on",
 }
 WEAVIATE_PROJECTION_VERSION = "v2"
 WEAVIATE_CLASS_PROPERTIES = [
@@ -83,6 +92,7 @@ WEAVIATE_CLASS_PROPERTIES = [
     {"name": "thread_id", "dataType": ["text"], "indexFilterable": True, "indexSearchable": False},
     {"name": "goals", "dataType": ["text[]"], "indexFilterable": True, "indexSearchable": False},
     {"name": "goals_text", "dataType": ["text"], "indexFilterable": False, "indexSearchable": True, "tokenization": "word"},
+    {"name": "intakes", "dataType": ["text[]"], "indexFilterable": True, "indexSearchable": False},
     {"name": "people", "dataType": ["text[]"], "indexFilterable": True, "indexSearchable": False},
     {"name": "organizations", "dataType": ["text[]"], "indexFilterable": True, "indexSearchable": False},
     {"name": "projects", "dataType": ["text[]"], "indexFilterable": True, "indexSearchable": False},
@@ -125,12 +135,107 @@ PEOPLE_STOPWORDS = {
 }
 NEGATIVE_COLLABORATION_TERMS = ("tough", "conflict", "blamed", "insulted", "throats", "issues", "argued")
 POSITIVE_COLLABORATION_TERMS = ("fun", "laughing", "great", "pumped", "working", "good")
+INTERACTION_TERMS = (
+    "talked with",
+    "talking with",
+    "working with",
+    "met with",
+    "hang with",
+    "argued with",
+    "texted",
+    "called",
+    "debriefed with",
+    "laughing with",
+)
+SPENT_TIME_TERMS = (
+    "hang with",
+    "hung with",
+    "spent time with",
+    "grabbed dinner with",
+    "went out with",
+    "kicked it with",
+)
+WORK_ACTIVITY_TERMS = (
+    "working on",
+    "worked on",
+    "building",
+    "built",
+    "developing",
+    "implemented",
+    "implementing",
+    "set up",
+    "setup",
+    "shipping",
+    "launched",
+    "coding",
+)
+EMOTION_TARGET_TERMS = (
+    "about",
+    "around",
+    "regarding",
+    "toward",
+    "towards",
+)
+BLOCKED_BY_TERMS = (
+    "blocked by",
+    "stuck because of",
+    "held up by",
+    "slowed by",
+    "derailed by",
+    "couldn't because of",
+)
+PERSON_ACTION_TERMS = (
+    "said",
+    "joined",
+    "helped",
+    "blamed",
+    "asked",
+    "told",
+    "met",
+    "texted",
+    "called",
+    "emailed",
+    "mentioned",
+)
+INTAKE_CONSUMPTION_TERMS = (
+    "drank",
+    "drink",
+    "drinking",
+    "ate",
+    "eating",
+    "consumed",
+    "had",
+    "after",
+)
+INTAKE_USE_TERMS = (
+    "used",
+    "using",
+    "smoked",
+    "smoking",
+    "vaped",
+    "vaping",
+    "took",
+    "taking",
+)
+INTAKE_AVOIDANCE_TERMS = (
+    "avoided",
+    "avoid",
+    "skipped",
+    "skip",
+    "stayed sober",
+    "staying sober",
+    "didn't drink",
+    "didnt drink",
+    "did not drink",
+    "without",
+    "cut out",
+)
 
 
 class ExtractedEntity(BaseModel):
     entity_type: str = Field(
         ...,
-        description="One of person, organization, place, context, mood, project, habit, goal, substance, health_state.",
+        description="One of person, organization, place, context, mood, project, habit, goal, intake, health_state.",
     )
     name: str = Field(..., min_length=1)
     canonical_name: str = Field(..., min_length=1)
@@ -148,6 +253,7 @@ class ExtractedRelationship(BaseModel):
     relationship_type: str = Field(..., min_length=1)
     confidence: float = Field(..., ge=0, le=1)
     evidence: str = Field(..., min_length=1)
+    extraction_source: str = Field(default="model", min_length=1)
 
 
 class GraphExtraction(BaseModel):
@@ -209,7 +315,24 @@ def sanitize_entity_type(value: str) -> str | None:
     lowered = normalize_name(value)
     if lowered in {"company", "org", "organisation"}:
         return "organization"
+    if lowered in {"substance", "consumable"}:
+        return "intake"
     return lowered if lowered in ALLOWED_ENTITY_TYPES else None
+
+
+def confidence_bucket_for_confidence(confidence: float) -> str:
+    if confidence >= 0.85:
+        return "high"
+    if confidence >= 0.65:
+        return "medium"
+    return "low"
+
+
+def sanitize_extraction_source(value: str | None) -> str:
+    normalized = normalize_name(value or "")
+    if normalized in {"heuristic", "model", "normalized", "system"}:
+        return normalized
+    return "model"
 
 
 PERSON_ALIAS_MAP = {
@@ -302,6 +425,9 @@ HABIT_PATTERNS = {
 MOOD_PATTERNS = {
     "ashamed": "ashamed",
     "anxious": "anxious",
+    "excited": "excited",
+    "great": "great",
+    "pumped": "pumped",
     "tired": "tired",
     "scattered": "scattered",
     "irritable": "irritable",
@@ -311,13 +437,17 @@ MOOD_PATTERNS = {
     "drained": "drained",
     "resentful": "resentful",
 }
-SUBSTANCE_PATTERNS = {
+INTAKE_PATTERNS = {
     "weed": "weed",
     "alcohol": "alcohol",
     "medication": "medication",
     "caffeine": "caffeine",
     "coffee": "coffee",
     "nicotine": "nicotine",
+    "high sugar": "high_sugar",
+    "sugar": "sugar",
+    "edible": "edible",
+    "edibles": "edibles",
 }
 HEALTH_PATTERNS = {
     "poor sleep": "poor_sleep",
@@ -599,6 +729,7 @@ def build_semantic_memory_summary(entry: JournalEntryRecord, extraction: GraphEx
     moods = entity_display_names(extraction, "mood")
     habits = entity_display_names(extraction, "habit")
     health_states = entity_display_names(extraction, "health_state")
+    intakes = entity_display_names(extraction, "intake")
     goals = [normalize_free_text(goal) for goal in entry.goals]
 
     segments: list[str] = []
@@ -635,6 +766,8 @@ def build_semantic_memory_summary(entry: JournalEntryRecord, extraction: GraphEx
     if moods or health_states:
         state_values = moods + health_states
         segments.append(f"State signal: {format_display_list(state_values)}.")
+    if intakes:
+        segments.append(f"Intake signal: {format_display_list(intakes)}.")
     if habits and goals:
         segments.append(
             f"Behavioral thread: {format_display_list(habits)} in relation to goals {format_display_list(goals)}."
@@ -665,6 +798,7 @@ def build_weaviate_projection_payload(
     goals = [normalize_free_text(goal) for goal in entry.goals]
     projects = entity_display_names(extraction, "project", allow_generic=False)
     organizations = entity_display_names(extraction, "organization", allow_generic=False)
+    intakes = entity_display_names(extraction, "intake", allow_generic=False)
     people = prune_people_against_projects(
         entity_display_names(extraction, "person", include_self=False, allow_generic=False),
         [*projects, *organizations],
@@ -679,6 +813,7 @@ def build_weaviate_projection_payload(
         "thread_id": entry.thread_id or "",
         "goals": goals,
         "goals_text": ", ".join(goals),
+        "intakes": intakes,
         "people": people,
         "organizations": organizations,
         "projects": projects,
@@ -704,6 +839,7 @@ def build_weaviate_projection_payload(
                 [
                     normalized_content,
                     metadata["goals_text"],
+                    ", ".join(metadata["intakes"]),
                     ", ".join(metadata["people"]),
                     ", ".join(metadata["organizations"]),
                     ", ".join(metadata["projects"]),
@@ -724,6 +860,7 @@ def build_weaviate_projection_payload(
                 content,
                 normalized_content,
                 metadata["goals_text"],
+                ", ".join(metadata["intakes"]),
                 ", ".join(metadata["organizations"]),
                 ", ".join(metadata["canonical_entities"]),
             ],
@@ -906,6 +1043,8 @@ def heuristic_extract_graph(entry: JournalEntryRecord) -> GraphExtraction:
         relationship_type: str,
         confidence: float,
         evidence: str,
+        *,
+        extraction_source: str = "heuristic",
     ) -> None:
         if source_entity.canonical_name == target_entity.canonical_name:
             return
@@ -922,6 +1061,7 @@ def heuristic_extract_graph(entry: JournalEntryRecord) -> GraphExtraction:
                 relationship_type=relationship_key[2],
                 confidence=confidence,
                 evidence=evidence,
+                extraction_source=sanitize_extraction_source(extraction_source),
             )
 
     for token, label in MOOD_PATTERNS.items():
@@ -939,9 +1079,9 @@ def heuristic_extract_graph(entry: JournalEntryRecord) -> GraphExtraction:
     for token, label in HABIT_PATTERNS.items():
         if token in lowered:
             add_entity("habit", label, 0.67, f"Mentioned habit pattern '{token}'.")
-    for token, label in SUBSTANCE_PATTERNS.items():
+    for token, label in INTAKE_PATTERNS.items():
         if token in lowered:
-            add_entity("substance", label, 0.75, f"Mentioned substance pattern '{token}'.")
+            add_entity("intake", label, 0.75, f"Mentioned intake pattern '{token}'.")
     for token, label in HEALTH_PATTERNS.items():
         if token in lowered:
             add_entity("health_state", label, 0.78, f"Mentioned health pattern '{token}'.")
@@ -981,9 +1121,17 @@ def heuristic_extract_graph(entry: JournalEntryRecord) -> GraphExtraction:
     ):
         if is_valid_person_candidate(candidate):
             add_entity("person", candidate, 0.72, f"Contextual person mention '{candidate}'.")
-    for candidate in re.findall(r"\b[A-Z][a-z]+\b", text):
-        if candidate not in {"I", *PERSON_STOPWORDS} and is_valid_person_candidate(candidate):
-            add_entity("person", candidate, 0.58, f"Capitalized name candidate '{candidate}'.")
+    non_person_canonical_names = {
+        entity.canonical_name
+        for entity in entity_index.values()
+        if entity.entity_type != "person"
+    }
+    for candidate in extract_case_sensitive_phrase(
+        rf"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s+(?:{'|'.join(PERSON_ACTION_TERMS)})\b",
+        text,
+    ):
+        if is_valid_person_candidate(candidate) and normalize_name(candidate) not in non_person_canonical_names:
+            add_entity("person", candidate, 0.76, f"Action-linked person mention '{candidate}'.")
 
     for candidate in extract_phrase(r"\b(?:at|in|to)\s+the\s+([a-z][a-z\s]{2,30})", lowered):
         if candidate in PLACE_PATTERNS or candidate in CONTEXT_PATTERNS:
@@ -1056,10 +1204,10 @@ def heuristic_extract_graph(entry: JournalEntryRecord) -> GraphExtraction:
             for target_entity in impacted:
                 add_relationship(source_entity, target_entity, "affected", 0.62, f"Shared sentence context in '{sentence}'.")
 
-        substances = [entity for entity in sentence_entities if entity.entity_type == "substance"]
-        for source_entity in substances:
+        intakes = [entity for entity in sentence_entities if entity.entity_type == "intake"]
+        for source_entity in intakes:
             for target_entity in impacted:
-                add_relationship(source_entity, target_entity, "affected", 0.66, f"Substance linked to state in '{sentence}'.")
+                add_relationship(source_entity, target_entity, "affected", 0.66, f"Intake linked to state in '{sentence}'.")
 
         goals = [entity for entity in sentence_entities if entity.entity_type == "goal"]
         habits = [entity for entity in sentence_entities if entity.entity_type == "habit"]
@@ -1070,9 +1218,108 @@ def heuristic_extract_graph(entry: JournalEntryRecord) -> GraphExtraction:
 
         people = [entity for entity in sentence_entities if entity.entity_type == "person"]
         moods = [entity for entity in sentence_entities if entity.entity_type == "mood"]
+        health_states = [entity for entity in sentence_entities if entity.entity_type == "health_state"]
+        projects = [entity for entity in sentence_entities if entity.entity_type == "project"]
+        organizations = [entity for entity in sentence_entities if entity.entity_type == "organization"]
+        feeling_targets = [
+            entity
+            for entity in sentence_entities
+            if entity.entity_type in {"person", "project", "organization", "context", "place", "goal", "habit", "intake"}
+        ]
         for person in people:
             for mood in moods:
-                add_relationship(person, mood, "affected", 0.63, f"Person-state connection in '{sentence}'.")
+                add_relationship(person, mood, "experienced", 0.78, f"Person experienced mood in '{sentence}'.")
+            for health_state in health_states:
+                add_relationship(person, health_state, "experienced", 0.74, f"Person experienced health state in '{sentence}'.")
+            if (moods or health_states) and any(token in sentence_lower for token in EMOTION_TARGET_TERMS):
+                for target in feeling_targets:
+                    if target.canonical_name == person.canonical_name:
+                        continue
+                    add_relationship(
+                        person,
+                        target,
+                        "felt_about",
+                        0.77,
+                        f"Person felt a state about target in '{sentence}'.",
+                    )
+        if people and intakes:
+            intake_relationship_type = None
+            intake_confidence = 0.63
+            if any(token in sentence_lower for token in INTAKE_AVOIDANCE_TERMS):
+                intake_relationship_type = "avoided"
+                intake_confidence = 0.82
+            elif any(token in sentence_lower for token in INTAKE_USE_TERMS):
+                intake_relationship_type = "used"
+                intake_confidence = 0.8
+            elif any(token in sentence_lower for token in INTAKE_CONSUMPTION_TERMS) or any(
+                person.canonical_name == CURRENT_USER_CANONICAL_NAME for person in people
+            ):
+                intake_relationship_type = "consumed"
+                intake_confidence = 0.72
+            if intake_relationship_type is not None:
+                for person in people:
+                    for intake in intakes:
+                        add_relationship(
+                            person,
+                            intake,
+                            intake_relationship_type,
+                            intake_confidence,
+                            f"Person {intake_relationship_type.replace('_', ' ')} intake in '{sentence}'.",
+                        )
+
+        if any(token in sentence_lower for token in SPENT_TIME_TERMS) and len(people) >= 2:
+            for index, source_person in enumerate(people):
+                for target_person in people[index + 1 :]:
+                    add_relationship(
+                        source_person,
+                        target_person,
+                        "spent_time_with",
+                        0.8,
+                        f"Social time together in '{sentence}'.",
+                    )
+        elif (
+            any(token in sentence_lower for token in INTERACTION_TERMS)
+            or ((projects or organizations) and len(people) >= 2 and " with " in f" {sentence_lower} ")
+        ) and len(people) >= 2:
+            for index, source_person in enumerate(people):
+                for target_person in people[index + 1 :]:
+                    add_relationship(
+                        source_person,
+                        target_person,
+                        "interacted_with",
+                        0.76,
+                        f"Interaction between people in '{sentence}'.",
+                    )
+
+        if any(token in sentence_lower for token in WORK_ACTIVITY_TERMS) and projects and people:
+            for person in people:
+                for project in projects:
+                    add_relationship(
+                        person,
+                        project,
+                        "worked_on",
+                        0.8,
+                        f"Work activity linked person to project in '{sentence}'.",
+                    )
+
+        if any(token in sentence_lower for token in BLOCKED_BY_TERMS):
+            blockers = [
+                entity
+                for entity in sentence_entities
+                if entity.entity_type in {"person", "organization", "context", "place", "health_state", "intake"}
+            ]
+            blocked_entities = [*projects, *goals, *habits] or people
+            for blocked_entity in blocked_entities:
+                for blocker in blockers:
+                    if blocked_entity.canonical_name == blocker.canonical_name:
+                        continue
+                    add_relationship(
+                        blocked_entity,
+                        blocker,
+                        "blocked_by",
+                        0.79,
+                        f"Blocked-by phrase in '{sentence}'.",
+                    )
 
     goal_entities = [entity for entity in entities if entity.entity_type == "goal"]
     health_entities = [entity for entity in entities if entity.entity_type == "health_state"]
@@ -1100,6 +1347,7 @@ def heuristic_extract_graph(entry: JournalEntryRecord) -> GraphExtraction:
                 relationship_type="about",
                 confidence=0.6,
                 evidence="Fallback observation link.",
+                extraction_source="heuristic",
             )
         )
 
@@ -1169,6 +1417,52 @@ def normalize_extraction(entry: JournalEntryRecord, extraction: GraphExtraction)
         canonical_name_map[normalize_name(entity.name)] = canonical_name
 
     known_canonical_names = {entity.canonical_name for entity in normalized_entities.values()}
+    entity_type_by_canonical_name = {
+        entity.canonical_name: entity.entity_type
+        for entity in normalized_entities.values()
+    }
+
+    def normalize_relationship_semantics(
+        *,
+        source_canonical_name: str,
+        target_canonical_name: str,
+        relationship_type: str,
+    ) -> tuple[str, str, str]:
+        source_type = entity_type_by_canonical_name.get(source_canonical_name)
+        target_type = entity_type_by_canonical_name.get(target_canonical_name)
+
+        if relationship_type == "affected" and source_type == "person" and target_type in {"mood", "health_state"}:
+            return source_canonical_name, target_canonical_name, "experienced"
+
+        if relationship_type == "about":
+            if source_type == "person" and target_type in {"mood", "health_state"}:
+                return source_canonical_name, target_canonical_name, "experienced"
+            if source_type in {"mood", "health_state"} and target_type == "person":
+                return target_canonical_name, source_canonical_name, "experienced"
+            if source_type == "person" and target_type == "project":
+                return source_canonical_name, target_canonical_name, "worked_on"
+            if source_type == "project" and target_type == "person":
+                return target_canonical_name, source_canonical_name, "worked_on"
+            if source_type == "person" and target_type == "person":
+                return source_canonical_name, target_canonical_name, "interacted_with"
+            if source_type in {"context", "project", "place"} and target_type in {"mood", "health_state"}:
+                return source_canonical_name, target_canonical_name, "affected"
+            if source_type in {"mood", "health_state"} and target_type in {"context", "project", "place"}:
+                return target_canonical_name, source_canonical_name, "affected"
+        if relationship_type in {"consumed", "used", "avoided"} and source_type == "person" and target_type == "intake":
+            return source_canonical_name, target_canonical_name, relationship_type
+        if relationship_type == "felt_about":
+            if source_type in {"mood", "health_state"} and target_type == "person":
+                return target_canonical_name, source_canonical_name, "experienced"
+            if source_type == "person" and target_type in {"project", "organization", "context", "place", "goal", "habit", "person", "intake"}:
+                return source_canonical_name, target_canonical_name, "felt_about"
+        if relationship_type == "spent_time_with" and source_type == target_type == "person":
+            return source_canonical_name, target_canonical_name, "spent_time_with"
+        if relationship_type == "blocked_by" and source_type in {"project", "goal", "habit", "person"}:
+            return source_canonical_name, target_canonical_name, "blocked_by"
+
+        return source_canonical_name, target_canonical_name, relationship_type
+
     normalized_relationships: dict[tuple[str, str, str], ExtractedRelationship] = {}
     for relationship in extraction.relationships:
         source_canonical_name = canonical_name_map.get(
@@ -1183,10 +1477,19 @@ def normalize_extraction(entry: JournalEntryRecord, extraction: GraphExtraction)
             continue
         if target_canonical_name != "observation" and target_canonical_name not in known_canonical_names:
             continue
+        (
+            source_canonical_name,
+            target_canonical_name,
+            normalized_relationship_type,
+        ) = normalize_relationship_semantics(
+            source_canonical_name=source_canonical_name,
+            target_canonical_name=target_canonical_name,
+            relationship_type=sanitize_relationship_type(relationship.relationship_type),
+        )
         relationship_key = (
             source_canonical_name,
             target_canonical_name,
-            sanitize_relationship_type(relationship.relationship_type),
+            normalized_relationship_type,
         )
         current = normalized_relationships.get(relationship_key)
         normalized_relationship = ExtractedRelationship(
@@ -1195,6 +1498,7 @@ def normalize_extraction(entry: JournalEntryRecord, extraction: GraphExtraction)
             relationship_type=relationship_key[2],
             confidence=relationship.confidence,
             evidence=normalize_free_text(relationship.evidence),
+            extraction_source=sanitize_extraction_source(relationship.extraction_source),
         )
         if current is None or normalized_relationship.confidence > current.confidence:
             normalized_relationships[relationship_key] = normalized_relationship
@@ -1229,15 +1533,25 @@ def normalize_extraction(entry: JournalEntryRecord, extraction: GraphExtraction)
                 for relationship_key in (
                     (previous_project, current_project, "precedes"),
                     (current_project, previous_project, "precedes"),
+                    (previous_project, current_project, "followed"),
+                    (current_project, previous_project, "followed"),
                 ):
                     normalized_relationships.pop(relationship_key, None)
-                relationship_key = (previous_project, current_project, "precedes")
-                normalized_relationships[relationship_key] = ExtractedRelationship(
+                normalized_relationships[(previous_project, current_project, "precedes")] = ExtractedRelationship(
                     source_canonical_name=previous_project,
                     target_canonical_name=current_project,
                     relationship_type="precedes",
                     confidence=0.97,
                     evidence="Explicit project chronology: 'last/previous project' occurs before 'this/current project'.",
+                    extraction_source="normalized",
+                )
+                normalized_relationships[(current_project, previous_project, "followed")] = ExtractedRelationship(
+                    source_canonical_name=current_project,
+                    target_canonical_name=previous_project,
+                    relationship_type="followed",
+                    confidence=0.97,
+                    evidence="Explicit project chronology: 'this/current project' follows the 'last/previous project'.",
+                    extraction_source="normalized",
                 )
 
     normalized_summary = normalize_free_text(extraction.summary) if extraction.summary.strip() else build_episode_summary(entry)
@@ -1253,9 +1567,20 @@ def extract_graph_with_model(entry: JournalEntryRecord) -> GraphExtraction:
     prompt = "\n".join(
         [
             "Extract a compact but personally useful knowledge graph from this journal entry.",
-            "Use only entity types: person, organization, place, context, mood, project, habit, goal, substance, health_state.",
+            "Use only entity types: person, organization, place, context, mood, project, habit, goal, intake, health_state.",
             "Use organization for companies, teams, employers, clients, or institutions when they are not the project itself.",
-            "Use only relationship types: affected, supported, conflicts_with, led_up_to, triggered_by, precedes, causes, recurs, about, contributed_to, experienced.",
+            "Use intake for consumed or body-input items like alcohol, weed, caffeine, medication, or high-sugar days.",
+            "Prefer specific relationships over generic ones.",
+            "Use experienced for person-to-mood or person-to-health_state links.",
+            "Use worked_on for person-to-project work relationships.",
+            "Use interacted_with for person-to-person social or collaborative contact.",
+            "Use spent_time_with for softer social time together.",
+            "Use consumed or used for person-to-intake links when someone drinks, eats, smokes, vapes, takes, or otherwise uses something.",
+            "Use avoided for explicit restraint or sobriety around an intake.",
+            "Use felt_about when a person expresses a mood or health state about a person, project, or context.",
+            "Use blocked_by for obstacles that block a person, goal, habit, or project.",
+            "Use followed for clear succession where one project or context came after another.",
+            "Use only relationship types: affected, supported, conflicts_with, led_up_to, triggered_by, precedes, followed, causes, recurs, about, contributed_to, experienced, interacted_with, spent_time_with, worked_on, felt_about, blocked_by, consumed, used, avoided.",
             "Canonicalize aliases when they likely refer to the same thing, for example Josh and Joshua.",
             "If an alias merge is plausible but uncertain, set needs_clarification=true and explain why in resolution_notes.",
             "When uncertain, keep the raw name as the entity itself and put the suggested merge target in candidate_canonical_name.",
@@ -1504,6 +1829,7 @@ class GraphProjector:
                 relationship_type=relationship.relationship_type,
                 confidence=relationship.confidence,
                 evidence=relationship.evidence,
+                extraction_source=sanitize_extraction_source(relationship.extraction_source),
             )
             relationship_key = (
                 prepared_relationship.source_canonical_name,
@@ -1596,7 +1922,9 @@ class GraphProjector:
                 MATCH (o:Observation {{id: $observation_id}})
                 MERGE (o)-[r:OBSERVED {{source_record_id: $source_record_id, entity_key: $entity_key}}]->(e)
                 SET r.confidence = $confidence,
+                    r.confidence_bucket = $confidence_bucket,
                     r.evidence = $evidence,
+                    r.extraction_source = $extraction_source,
                     r.entity_type = $entity_type
                 """,
                 {
@@ -1612,7 +1940,9 @@ class GraphProjector:
                     "source_record_id": entry.id,
                     "created_at": entry.created_at.isoformat(),
                     "confidence": entity.confidence,
+                    "confidence_bucket": confidence_bucket_for_confidence(entity.confidence),
                     "evidence": entity.evidence,
+                    "extraction_source": "system",
                 },
             )
 
@@ -1638,7 +1968,9 @@ class GraphProjector:
                 MATCH (target {{{target_match_field}: $target_key}})
                 MERGE (source)-[r:{relationship_type} {{source_record_id: $source_record_id, observation_id: $observation_id}}]->(target)
                 SET r.confidence = $confidence,
+                    r.confidence_bucket = $confidence_bucket,
                     r.evidence = $evidence,
+                    r.extraction_source = $extraction_source,
                     r.provenance = $provenance
                 """,
                 {
@@ -1647,7 +1979,9 @@ class GraphProjector:
                     "source_record_id": entry.id,
                     "observation_id": observation_id,
                     "confidence": relation.confidence,
+                    "confidence_bucket": confidence_bucket_for_confidence(relation.confidence),
                     "evidence": relation.evidence,
+                    "extraction_source": sanitize_extraction_source(relation.extraction_source),
                     "provenance": f"journal_entry:{entry.id}",
                 },
             )
