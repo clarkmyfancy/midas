@@ -114,6 +114,39 @@ export interface GraphRelationshipResponse {
   properties: Record<string, unknown>;
 }
 
+export interface InsightCardResponse {
+  id: string;
+  category: string;
+  title: string;
+  summary: string;
+  severity: string;
+  confidence: number;
+  evidence: string[];
+  related_entities: string[];
+  source_types: string[];
+}
+
+export interface InsightSectionResponse {
+  id: string;
+  title: string;
+  description: string;
+  cards: InsightCardResponse[];
+}
+
+export interface InsightStatResponse {
+  label: string;
+  value: string;
+}
+
+export interface InsightsResponse {
+  summary: string;
+  generated_at: string;
+  window_days: number;
+  sections: InsightSectionResponse[];
+  stats: InsightStatResponse[];
+  warnings: string[];
+}
+
 export interface JournalDeleteResponse {
   entry_id: string;
   cleanup: DerivedStoreCleanupResponse[];

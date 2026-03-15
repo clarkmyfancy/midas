@@ -177,6 +177,106 @@ class TrackingGraphProjector:
         return f"{self.base_url}/browser/"
 
 
+class InsightGraphProjector:
+    observations: dict[tuple[str, str], dict] = {}
+
+    def __init__(self, base_url: str | None = None, username: str | None = None, password: str | None = None) -> None:
+        self.base_url = base_url or "http://127.0.0.1:7474"
+
+    def project(self, job, entry) -> None:
+        extraction = extract_graph(entry)
+        node_id_by_canonical_name = {"observation": job.id}
+        nodes = [
+            {
+                "id": job.id,
+                "labels": ["Observation"],
+                "properties": {"source_record_id": entry.id, "summary": extraction.summary},
+            }
+        ]
+        for entity in extraction.entities:
+            node_id = f"{job.id}:{entity.canonical_name}"
+            node_id_by_canonical_name[entity.canonical_name] = node_id
+            nodes.append(
+                {
+                    "id": node_id,
+                    "labels": ["Entity", entity.entity_type.title()],
+                    "properties": {
+                        "canonical_name": entity.canonical_name,
+                        "display_name": entity.name,
+                        "entity_type": entity.entity_type,
+                    },
+                }
+            )
+
+        relationships = [
+            {
+                "id": f"observed-{job.id}:{entity.canonical_name}",
+                "type": "OBSERVED",
+                "startNode": job.id,
+                "endNode": node_id_by_canonical_name[entity.canonical_name],
+                "properties": {
+                    "source_record_id": entry.id,
+                    "confidence": entity.confidence,
+                    "confidence_bucket": "high" if entity.confidence >= 0.85 else "medium",
+                    "extraction_source": "system",
+                },
+            }
+            for entity in extraction.entities
+        ]
+        for index, relationship in enumerate(extraction.relationships):
+            source_id = node_id_by_canonical_name.get(relationship.source_canonical_name)
+            target_id = node_id_by_canonical_name.get(relationship.target_canonical_name)
+            if not source_id or not target_id:
+                continue
+            relationships.append(
+                {
+                    "id": f"rel-{job.id}-{index}",
+                    "type": relationship.relationship_type.upper(),
+                    "startNode": source_id,
+                    "endNode": target_id,
+                    "properties": {
+                        "confidence": relationship.confidence,
+                        "confidence_bucket": "high" if relationship.confidence >= 0.85 else ("medium" if relationship.confidence >= 0.65 else "low"),
+                        "extraction_source": relationship.extraction_source,
+                        "evidence": relationship.evidence,
+                    },
+                }
+            )
+
+        self.observations[(entry.user_id, entry.id)] = {
+            "observation": nodes[0],
+            "nodes": nodes,
+            "relationships": relationships,
+        }
+
+    def fetch_observation(self, source_record_id: str, user_id: str):
+        return self.observations.get(
+            (user_id, source_record_id),
+            {"observation": None, "nodes": [], "relationships": []},
+        )
+
+    def delete_observation(self, source_record_id: str, user_id: str):
+        from midas.core.projections import GraphCleanupResult
+
+        observation = self.observations.pop((user_id, source_record_id), None)
+        if observation is None:
+            return GraphCleanupResult(
+                deleted_observation_ids=[],
+                deleted_relationships=0,
+                deleted_entities=0,
+            )
+        observation_node = observation.get("observation")
+        observation_id = str(observation_node.get("id")) if observation_node else ""
+        return GraphCleanupResult(
+            deleted_observation_ids=[observation_id] if observation_id else [],
+            deleted_relationships=len(observation.get("relationships", [])),
+            deleted_entities=max(len(observation.get("nodes", [])) - 1, 0),
+        )
+
+    def browser_url(self) -> str:
+        return f"{self.base_url}/browser/"
+
+
 def register_user(email: str) -> str:
     response = client.post(
         "/v1/auth/register",
@@ -483,6 +583,49 @@ def test_review_endpoint_filters_low_confidence_graph_edges(monkeypatch) -> None
         if relationship["type"] != "OBSERVED"
     ]
     assert {relationship["type"] for relationship in unfiltered_relationships} == {"EXPERIENCED", "WORKED_ON"}
+
+
+def test_insights_endpoint_returns_longitudinal_synthesis(monkeypatch) -> None:
+    FakeWeaviateProjector.objects = {}
+    InsightGraphProjector.observations = {}
+    monkeypatch.setattr("midas.core.projections.WeaviateProjector", FakeWeaviateProjector)
+    monkeypatch.setattr("midas.core.projections.GraphProjector", InsightGraphProjector)
+    monkeypatch.setattr("app.main.WeaviateProjector", FakeWeaviateProjector)
+    monkeypatch.setattr("app.main.GraphProjector", InsightGraphProjector)
+    monkeypatch.setattr("midas.core.review.WeaviateProjector", FakeWeaviateProjector)
+    monkeypatch.setattr("midas.core.review.GraphProjector", InsightGraphProjector)
+    monkeypatch.setattr("midas.core.insights.WeaviateProjector", FakeWeaviateProjector)
+    monkeypatch.setattr("midas.core.insights.GraphProjector", InsightGraphProjector)
+    monkeypatch.setenv("MIDAS_AUTO_PROJECT", "0")
+
+    access_token = register_user("insights@example.com")
+    create_entry(access_token, "I felt anxious about the launch after coffee and a high sugar day.")
+    create_entry(access_token, "I spent time with Torian, and the launch was blocked by poor sleep.")
+
+    run_response = client.post(
+        "/v1/projection-jobs/run?limit=20",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert run_response.status_code == 200
+
+    insights_response = client.get(
+        "/v1/insights?window_days=30&confidence_threshold=0.65",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert insights_response.status_code == 200
+    payload = insights_response.json()
+    assert payload["summary"]
+    assert payload["sections"]
+    section_titles = {section["title"] for section in payload["sections"]}
+    assert "Patterns" in section_titles
+    assert "Tensions" in section_titles
+    card_titles = {
+        card["title"]
+        for section in payload["sections"]
+        for card in section["cards"]
+    }
+    assert "Attention orbit" in card_titles
+    assert "Intake signal" in card_titles
 
 
 def test_resolving_clarification_reprojects_weaviate_and_graph_artifacts(monkeypatch) -> None:

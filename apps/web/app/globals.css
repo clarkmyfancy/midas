@@ -488,6 +488,7 @@ h2 {
 }
 
 .review-page,
+.insights-page,
 .review-layout,
 .review-stats-grid,
 .review-graph-grid {
@@ -497,6 +498,14 @@ h2 {
 
 .review-hero {
   gap: 18px;
+}
+
+.insights-hero {
+  display: grid;
+  gap: 18px;
+  background:
+    radial-gradient(circle at top right, rgba(224, 183, 123, 0.22), transparent 38%),
+    linear-gradient(160deg, rgba(255, 252, 245, 0.94), rgba(246, 238, 225, 0.92));
 }
 
 .review-title {
@@ -520,6 +529,10 @@ h2 {
 }
 
 .review-stats-grid {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.insights-stats-grid {
   grid-template-columns: repeat(6, minmax(0, 1fr));
 }
 
@@ -548,6 +561,87 @@ h2 {
 
 .review-layout {
   grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.9fr);
+}
+
+.insights-section-list {
+  display: grid;
+  gap: 20px;
+}
+
+.insights-section-panel {
+  display: grid;
+  gap: 18px;
+}
+
+.insights-section-header {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 0.7fr) minmax(0, 1.3fr);
+  align-items: end;
+}
+
+.insights-section-description {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.insights-card-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.insight-card {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: 22px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.85), rgba(249, 242, 231, 0.78));
+  padding: 18px;
+}
+
+.insight-card-high {
+  border-color: rgba(154, 39, 22, 0.24);
+}
+
+.insight-card-medium {
+  border-color: rgba(195, 132, 35, 0.24);
+}
+
+.insight-card-low {
+  border-color: rgba(31, 107, 84, 0.18);
+}
+
+.insight-card-header,
+.insight-card-meta,
+.insight-entity-row,
+.insights-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.insight-card-header {
+  justify-content: space-between;
+}
+
+.insight-card-summary {
+  margin: 0;
+  color: var(--text);
+  line-height: 1.68;
+}
+
+.insight-entity-chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 5px 12px;
+  background: rgba(73, 54, 38, 0.08);
+  color: var(--text);
+  font-size: 0.82rem;
+  font-weight: 700;
 }
 
 .review-finding-list,
@@ -1443,7 +1537,9 @@ code {
   .card-grid,
   .review-layout,
   .review-graph-grid,
-  .review-stats-grid {
+  .review-stats-grid,
+  .insights-stats-grid,
+  .insights-section-header {
     grid-template-columns: 1fr;
   }
 

@@ -13,6 +13,12 @@ from app.schemas.chat import (
     ChatThreadListResponse,
     ChatThreadSummaryResponse,
 )
+from app.schemas.insights import (
+    InsightCardResponse,
+    InsightSectionResponse,
+    InsightsResponse,
+    InsightStatResponse,
+)
 from app.schemas.journal import (
     ClarificationResolveRequest,
     ClarificationTaskListResponse,
@@ -70,6 +76,10 @@ SCHEMA_MODELS = [
     GraphRelationshipResponse,
     GraphObservationResponse,
     MemoryDebugResponse,
+    InsightStatResponse,
+    InsightCardResponse,
+    InsightSectionResponse,
+    InsightsResponse,
     ReviewFindingResponse,
     ReviewStatResponse,
     WeeklyReviewResponse,
@@ -98,6 +108,10 @@ __all__ = [
     "JournalIngestResponse",
     "MemorySettingsResponse",
     "MemoryDebugResponse",
+    "InsightStatResponse",
+    "InsightCardResponse",
+    "InsightSectionResponse",
+    "InsightsResponse",
     "GraphNodeResponse",
     "GraphObservationResponse",
     "GraphRelationshipResponse",

@@ -9,7 +9,7 @@ function navClassName(pathname: string, href: string) {
 
 export function SiteHeader() {
   const pathname = usePathname();
-  if (!pathname || !["/", "/reflect", "/profile", "/chat", "/memory", "/review"].includes(pathname)) {
+  if (!pathname || !["/", "/reflect", "/profile", "/chat", "/memory", "/review", "/insights"].includes(pathname)) {
     return null;
   }
 
@@ -21,6 +21,9 @@ export function SiteHeader() {
         </Link>
         <Link className={navClassName(pathname, "/review")} href="/review">
           Review
+        </Link>
+        <Link className={navClassName(pathname, "/insights")} href="/insights">
+          Insights
         </Link>
         <Link className={navClassName(pathname, "/memory")} href="/memory">
           Memory

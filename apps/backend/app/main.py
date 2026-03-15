@@ -34,6 +34,12 @@ from app.schemas.chat import (
     ChatThreadListResponse,
     ChatThreadSummaryResponse,
 )
+from app.schemas.insights import (
+    InsightCardResponse,
+    InsightSectionResponse,
+    InsightsResponse,
+    InsightStatResponse,
+)
 from app.schemas.journal import (
     ClarificationResolveRequest,
     ClarificationTaskListResponse,
@@ -70,6 +76,7 @@ from midas.core.entitlements import (
     resolve_capabilities_for_user,
 )
 from midas.core.loader import load_capabilities
+from midas.core.insights import build_insights
 from midas.core.memory import (
     append_chat_message_for_user,
     create_journal_entry_for_user,
@@ -262,6 +269,33 @@ def serialize_review_finding(finding) -> ReviewFindingResponse:
 
 def serialize_review_stat(stat) -> ReviewStatResponse:
     return ReviewStatResponse(label=stat.label, value=stat.value)
+
+
+def serialize_insight_stat(stat) -> InsightStatResponse:
+    return InsightStatResponse(label=stat.label, value=stat.value)
+
+
+def serialize_insight_card(card) -> InsightCardResponse:
+    return InsightCardResponse(
+        id=card.id,
+        category=card.category,
+        title=card.title,
+        summary=card.summary,
+        severity=card.severity,
+        confidence=card.confidence,
+        evidence=card.evidence,
+        related_entities=card.related_entities,
+        source_types=card.source_types,
+    )
+
+
+def serialize_insight_section(section) -> InsightSectionResponse:
+    return InsightSectionResponse(
+        id=section.id,
+        title=section.title,
+        description=section.description,
+        cards=[serialize_insight_card(card) for card in section.cards],
+    )
 
 
 def render_reflection_text(findings: list[str], summary: str) -> str:
@@ -503,6 +537,28 @@ def get_weekly_review(
             cypher_browser_url=GraphProjector().browser_url(),
         ),
         clarifications=[serialize_clarification_task(task) for task in result.clarifications],
+        warnings=result.warnings,
+    )
+
+
+@app.get("/api/v1/insights", response_model=InsightsResponse)
+@app.get("/v1/insights", response_model=InsightsResponse)
+def get_insights(
+    user: Annotated[AuthUser, Depends(get_current_user)],
+    window_days: int = 30,
+    confidence_threshold: float = 0.65,
+) -> InsightsResponse:
+    result = build_insights(
+        user_id=user.id,
+        window_days=window_days,
+        confidence_threshold=confidence_threshold,
+    )
+    return InsightsResponse(
+        summary=result.summary,
+        generated_at=result.generated_at,
+        window_days=result.window_days,
+        sections=[serialize_insight_section(section) for section in result.sections],
+        stats=[serialize_insight_stat(stat) for stat in result.stats],
         warnings=result.warnings,
     )
 
