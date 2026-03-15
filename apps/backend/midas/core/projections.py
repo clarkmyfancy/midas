@@ -29,6 +29,7 @@ from midas.core.memory import (
     mark_projection_job_completed,
     mark_projection_job_failed,
 )
+from midas.core.runtime import allow_test_external_store_access, is_test_mode
 
 
 VECTOR_CLASS_NAME = "MemoryArtifact"
@@ -204,10 +205,12 @@ BLOCKED_BY_TERMS = (
 )
 PERSON_ACTION_TERMS = (
     "said",
+    "stayed",
     "joined",
     "helped",
     "blamed",
     "asked",
+    "debriefed",
     "told",
     "met",
     "texted",
@@ -905,6 +908,12 @@ def call_json_api(
     payload: dict[str, Any] | None = None,
     headers: dict[str, str] | None = None,
 ) -> dict[str, Any]:
+    if is_test_mode() and not allow_test_external_store_access():
+        raise RuntimeError(
+            "External Weaviate and Neo4j access is disabled during tests. "
+            "Patch the projectors or set MIDAS_ALLOW_TEST_EXTERNAL_STORES=1 explicitly."
+        )
+
     body = None if payload is None else json.dumps(payload).encode("utf-8")
     request_headers = {"Accept": "application/json"}
     if payload is not None:
@@ -1161,6 +1170,12 @@ def heuristic_extract_graph(entry: JournalEntryRecord) -> GraphExtraction:
     ):
         if is_valid_person_candidate(candidate) and normalize_name(candidate) not in non_person_canonical_names:
             add_entity("person", candidate, 0.76, f"Action-linked person mention '{candidate}'.")
+    for candidate in extract_case_sensitive_phrase(
+        r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s+and\s+(?:I|i)\b",
+        text,
+    ):
+        if is_valid_person_candidate(candidate) and normalize_name(candidate) not in non_person_canonical_names:
+            add_entity("person", candidate, 0.78, f"Co-mention with the current user '{candidate}'.")
 
     for candidate in extract_phrase(r"\b(?:at|in|to)\s+the\s+([a-z][a-z\s]{2,30})", lowered):
         if candidate in PLACE_PATTERNS or candidate in CONTEXT_PATTERNS:

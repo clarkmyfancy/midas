@@ -16,6 +16,7 @@ from uuid import uuid4
 from fastapi import Depends, Header, HTTPException, status
 
 from midas.core.loader import load_capabilities
+from midas.core.runtime import allow_test_postgres_storage, is_test_mode
 
 try:
     import psycopg
@@ -54,6 +55,11 @@ def allows_in_memory_storage() -> bool:
 
 
 def require_postgres_storage(component_name: str) -> str | None:
+    if is_test_mode() and not allow_test_postgres_storage():
+        environment = os.getenv("MIDAS_ENV") or os.getenv("NODE_ENV") or "development"
+        if environment.strip().lower() in {"dev", "development", "local", "test", "testing"}:
+            return None
+
     db_uri = os.getenv("POSTGRES_URI")
     if db_uri:
         if psycopg is None:

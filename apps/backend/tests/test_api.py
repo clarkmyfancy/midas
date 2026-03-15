@@ -14,6 +14,7 @@ from midas.core.projections import (
     GraphUserCleanupResult,
     WeaviateCleanupResult,
     WeaviateLocalCleanupResult,
+    call_json_api,
 )
 
 
@@ -139,6 +140,16 @@ def test_memory_storage_requires_psycopg_when_postgres_is_configured(monkeypatch
         init_memory_storage()
 
 
+def test_memory_storage_ignores_postgres_uri_in_test_mode_for_development(monkeypatch) -> None:
+    reset_memory_storage_for_tests()
+    monkeypatch.setenv("MIDAS_ENV", "development")
+    monkeypatch.setenv("POSTGRES_URI", "postgresql://midas:midas@localhost:5432/midas")
+
+    store = memory_module.get_memory_store()
+
+    assert isinstance(store, memory_module.MemoryMemoryStore)
+
+
 def test_jwt_secret_is_required_outside_development(monkeypatch) -> None:
     monkeypatch.setenv("MIDAS_ENV", "production")
     monkeypatch.delenv("JWT_SECRET", raising=False)
@@ -169,6 +180,11 @@ def test_graph_projector_rejects_the_known_dev_password_outside_development(monk
 
     with pytest.raises(RuntimeError, match="NEO4J_PASSWORD"):
         GraphProjector()
+
+
+def test_external_store_http_access_is_blocked_during_tests() -> None:
+    with pytest.raises(RuntimeError, match="disabled during tests"):
+        call_json_api("GET", "http://127.0.0.1:8080/v1/schema")
 
 
 def test_auth_delete_data_clears_account_data_but_keeps_account(monkeypatch) -> None:

@@ -13,12 +13,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi import HTTPException, status
 from fastapi.responses import StreamingResponse
 from langchain_openai import ChatOpenAI
+from midas.core.runtime import should_load_backend_dotenv
 
 
 backend_env_dir = Path(__file__).resolve().parents[1]
-load_dotenv(backend_env_dir / ".env")
-if os.getenv("MIDAS_LOAD_DOTENV_LOCAL", "1") != "0":
-    load_dotenv(backend_env_dir / ".env.local", override=True)
+if should_load_backend_dotenv():
+    load_dotenv(backend_env_dir / ".env")
+    if os.getenv("MIDAS_LOAD_DOTENV_LOCAL", "1") != "0":
+        load_dotenv(backend_env_dir / ".env.local", override=True)
 
 from app.agents.graph import astream_reflection_workflow, run_reflection_workflow
 from app.schemas.auth import (
