@@ -293,6 +293,27 @@ If you want to confirm the whole stack is healthy:
 
 If `MIDAS_AUTO_PROJECT=0`, use the `Run Projections` control from the Memory page to process the queued jobs.
 
+### Replay derived stores from Postgres
+
+If Weaviate or Neo4j needs to be rebuilt from canonical Postgres records, use the backend replay script.
+
+From `apps/backend`:
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache uv run python scripts/replay_projections.py --entry-id <entry_id> --target weaviate
+UV_CACHE_DIR=/tmp/uv-cache uv run python scripts/replay_projections.py --user-id <user_id> --target neo4j
+UV_CACHE_DIR=/tmp/uv-cache uv run python scripts/replay_projections.py --all-users --target all
+```
+
+Use `--dry-run` first to inspect the selected entry and job counts without mutating anything.
+
+This replay flow:
+
+- reads canonical journal entries from Postgres
+- deletes the targeted derived artifacts for the requested scope
+- rebuilds only the selected projection types
+- marks replayed jobs completed or failed so recovery attempts remain visible
+
 ### 9. What success looks like
 
 If local setup is working correctly:

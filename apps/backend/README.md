@@ -57,6 +57,18 @@ From `apps/backend`:
 uv run python scripts/generate_types.py
 ```
 
+## Replay derived projections
+
+If Weaviate or Neo4j needs to be rebuilt from canonical Postgres data, run:
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache uv run python scripts/replay_projections.py --entry-id <entry_id> --target weaviate
+UV_CACHE_DIR=/tmp/uv-cache uv run python scripts/replay_projections.py --user-id <user_id> --target neo4j
+UV_CACHE_DIR=/tmp/uv-cache uv run python scripts/replay_projections.py --all-users --target all --dry-run
+```
+
+The replay tooling is intended for operator recovery work, not normal user flows.
+
 From the repository root:
 
 ```bash
