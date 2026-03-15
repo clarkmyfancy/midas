@@ -522,7 +522,16 @@ def b64url_decode(data: str) -> bytes:
 
 
 def get_jwt_secret() -> str:
-    return os.getenv("JWT_SECRET", "dev-jwt-secret-change-me")
+    secret = os.getenv("JWT_SECRET")
+    if secret:
+        if not allows_in_memory_storage() and secret == "dev-jwt-secret-change-me":
+            raise RuntimeError("JWT_SECRET must not use the development default outside development and test")
+        return secret
+
+    if allows_in_memory_storage():
+        return "dev-jwt-secret-change-me"
+
+    raise RuntimeError("JWT_SECRET is required outside development and test")
 
 
 def create_access_token(user: AuthUser) -> str:

@@ -78,6 +78,24 @@ ALLOWED_RELATIONSHIPS = {
     "used",
     "worked_on",
 }
+
+
+def allows_local_defaults() -> bool:
+    environment = os.getenv("MIDAS_ENV") or os.getenv("NODE_ENV") or "development"
+    return environment.strip().lower() in {"dev", "development", "local", "test", "testing"}
+
+
+def resolve_neo4j_password(password: str | None) -> str:
+    resolved_password = password or os.getenv("NEO4J_PASSWORD")
+    if resolved_password:
+        if not allows_local_defaults() and resolved_password == "midasdevpassword":
+            raise RuntimeError("NEO4J_PASSWORD must not use the development default outside development and test")
+        return resolved_password
+
+    if allows_local_defaults():
+        return "midasdevpassword"
+
+    raise RuntimeError("NEO4J_PASSWORD is required outside development and test")
 WEAVIATE_PROJECTION_VERSION = "v2"
 WEAVIATE_CLASS_PROPERTIES = [
     {"name": "user_id", "dataType": ["text"], "indexFilterable": True, "indexSearchable": False},
@@ -1652,7 +1670,7 @@ class GraphProjector:
     def __init__(self, base_url: str | None = None, username: str | None = None, password: str | None = None) -> None:
         self.base_url = (base_url or os.getenv("NEO4J_HTTP_URL") or "http://127.0.0.1:7474").rstrip("/")
         self.username = username or os.getenv("NEO4J_USERNAME") or "neo4j"
-        self.password = password or os.getenv("NEO4J_PASSWORD") or "midasdevpassword"
+        self.password = resolve_neo4j_password(password)
 
     def _headers(self) -> dict[str, str]:
         token = b64encode(f"{self.username}:{self.password}".encode("utf-8")).decode("utf-8")

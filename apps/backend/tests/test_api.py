@@ -9,6 +9,7 @@ from midas.core.registry import get_registry
 from midas.core.entitlements import init_auth_storage, reset_auth_storage_for_tests
 from midas.core import memory as memory_module
 from midas.core.projections import (
+    GraphProjector,
     GraphLocalCleanupResult,
     GraphUserCleanupResult,
     WeaviateCleanupResult,
@@ -136,6 +137,38 @@ def test_memory_storage_requires_psycopg_when_postgres_is_configured(monkeypatch
 
     with pytest.raises(RuntimeError, match="psycopg"):
         init_memory_storage()
+
+
+def test_jwt_secret_is_required_outside_development(monkeypatch) -> None:
+    monkeypatch.setenv("MIDAS_ENV", "production")
+    monkeypatch.delenv("JWT_SECRET", raising=False)
+
+    with pytest.raises(RuntimeError, match="JWT_SECRET"):
+        entitlements_module.get_jwt_secret()
+
+
+def test_jwt_secret_rejects_the_known_dev_default_outside_development(monkeypatch) -> None:
+    monkeypatch.setenv("MIDAS_ENV", "production")
+    monkeypatch.setenv("JWT_SECRET", "dev-jwt-secret-change-me")
+
+    with pytest.raises(RuntimeError, match="JWT_SECRET"):
+        entitlements_module.get_jwt_secret()
+
+
+def test_graph_projector_requires_neo4j_password_outside_development(monkeypatch) -> None:
+    monkeypatch.setenv("MIDAS_ENV", "production")
+    monkeypatch.delenv("NEO4J_PASSWORD", raising=False)
+
+    with pytest.raises(RuntimeError, match="NEO4J_PASSWORD"):
+        GraphProjector()
+
+
+def test_graph_projector_rejects_the_known_dev_password_outside_development(monkeypatch) -> None:
+    monkeypatch.setenv("MIDAS_ENV", "production")
+    monkeypatch.setenv("NEO4J_PASSWORD", "midasdevpassword")
+
+    with pytest.raises(RuntimeError, match="NEO4J_PASSWORD"):
+        GraphProjector()
 
 
 def test_auth_delete_data_clears_account_data_but_keeps_account(monkeypatch) -> None:
@@ -291,6 +324,7 @@ def test_dev_local_data_wipe_clears_all_memory_data_but_keeps_accounts(monkeypat
 
 
 def test_dev_local_data_wipe_is_hidden_in_production(monkeypatch) -> None:
+    monkeypatch.setenv("JWT_SECRET", "test-production-secret")
     access_token = register_and_login()
     monkeypatch.setenv("MIDAS_ENV", "production")
 
