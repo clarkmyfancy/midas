@@ -15,8 +15,14 @@ import {
   type ReactNode,
 } from "react";
 
-import { type AuthSession } from "../lib/auth-session";
-import { loginWithApi, registerWithApi } from "../lib/auth-api";
+import {
+  clearRefreshToken,
+  getBrowserStorage,
+  loadRefreshToken,
+  saveRefreshToken,
+  type AuthSession,
+} from "../lib/auth-session";
+import { loginWithApi, logoutWithApi, refreshSessionWithApi, registerWithApi } from "../lib/auth-api";
 
 type AuthContextValue = {
   isReady: boolean;
@@ -34,10 +40,50 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isReady, setIsReady] = useState(false);
 
   useEffect(() => {
-    setIsReady(true);
+    const storage = getBrowserStorage();
+    const refreshToken = loadRefreshToken(storage);
+
+    if (!refreshToken) {
+      setIsReady(true);
+      return;
+    }
+
+    let cancelled = false;
+
+    void refreshSessionWithApi({ refresh_token: refreshToken })
+      .then((nextSessionPayload) => {
+        if (cancelled) {
+          return;
+        }
+        const nextSession = {
+          accessToken: nextSessionPayload.access_token,
+          refreshToken: nextSessionPayload.refresh_token,
+          user: nextSessionPayload.user,
+        };
+        saveRefreshToken(storage, nextSession.refreshToken);
+        startTransition(() => setSession(nextSession));
+      })
+      .catch(() => {
+        if (cancelled) {
+          return;
+        }
+        clearRefreshToken(storage);
+        startTransition(() => setSession(null));
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsReady(true);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   async function persistSession(nextSession: AuthSession) {
+    const storage = getBrowserStorage();
+    saveRefreshToken(storage, nextSession.refreshToken);
     startTransition(() => setSession(nextSession));
     return nextSession;
   }
@@ -53,6 +99,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   function logout() {
+    const storage = getBrowserStorage();
+    const refreshToken = session?.refreshToken ?? loadRefreshToken(storage);
+    if (refreshToken) {
+      void logoutWithApi({ refresh_token: refreshToken }).catch(() => undefined);
+    }
+    clearRefreshToken(storage);
     startTransition(() => setSession(null));
   }
 

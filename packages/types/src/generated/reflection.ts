@@ -6,6 +6,14 @@ export interface AuthLoginRequest {
   password: string;
 }
 
+export interface AuthLogoutResponse {
+  ok?: boolean;
+}
+
+export interface AuthRefreshRequest {
+  refresh_token: string;
+}
+
 export interface AuthRegisterRequest {
   email: string;
   password: string;
@@ -13,6 +21,7 @@ export interface AuthRegisterRequest {
 
 export interface AuthTokenResponse {
   access_token: string;
+  refresh_token: string;
   token_type?: string;
   user: AuthUserResponse;
 }

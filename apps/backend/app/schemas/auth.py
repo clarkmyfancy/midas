@@ -11,6 +11,10 @@ class AuthLoginRequest(BaseModel):
     password: str = Field(..., min_length=8)
 
 
+class AuthRefreshRequest(BaseModel):
+    refresh_token: str = Field(..., min_length=16)
+
+
 class AuthUserResponse(BaseModel):
     id: str
     email: str
@@ -19,5 +23,10 @@ class AuthUserResponse(BaseModel):
 
 class AuthTokenResponse(BaseModel):
     access_token: str
+    refresh_token: str
     token_type: str = "bearer"
     user: AuthUserResponse
+
+
+class AuthLogoutResponse(BaseModel):
+    ok: bool = True

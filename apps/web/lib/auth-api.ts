@@ -1,7 +1,9 @@
 import type {
   AuthLoginRequest,
+  AuthRefreshRequest,
   AuthRegisterRequest,
   AuthTokenResponse,
+  AuthLogoutResponse,
   AuthUserResponse,
   LocalDataWipeResponse,
   UserDataDeleteResponse,
@@ -50,6 +52,36 @@ export function getCurrentUser(accessToken: string, fetcher: typeof fetch = fetc
     {
       headers: { Authorization: `Bearer ${accessToken}` },
       method: "GET",
+    },
+    fetcher,
+  );
+}
+
+export function refreshSessionWithApi(
+  payload: AuthRefreshRequest,
+  fetcher: typeof fetch = fetch,
+) {
+  return requestJson<AuthTokenResponse>(
+    "/api/v1/auth/refresh",
+    {
+      body: JSON.stringify(payload),
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+    },
+    fetcher,
+  );
+}
+
+export function logoutWithApi(
+  payload: AuthRefreshRequest,
+  fetcher: typeof fetch = fetch,
+) {
+  return requestJson<AuthLogoutResponse>(
+    "/api/v1/auth/logout",
+    {
+      body: JSON.stringify(payload),
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
     },
     fetcher,
   );

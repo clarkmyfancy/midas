@@ -23,6 +23,8 @@ if os.getenv("MIDAS_LOAD_DOTENV_LOCAL", "1") != "0":
 from app.agents.graph import astream_reflection_workflow, run_reflection_workflow
 from app.schemas.auth import (
     AuthLoginRequest,
+    AuthLogoutResponse,
+    AuthRefreshRequest,
     AuthRegisterRequest,
     AuthTokenResponse,
     AuthUserResponse,
@@ -69,11 +71,14 @@ from midas.core.entitlements import (
     create_access_token,
     get_current_user,
     init_auth_storage,
+    issue_refresh_session,
     login_user,
     optional_current_user,
     register_user,
+    revoke_refresh_session,
     requires_entitlement,
     resolve_capabilities_for_user,
+    rotate_refresh_session,
 )
 from midas.core.loader import load_capabilities
 from midas.core.insights import build_insights
@@ -937,6 +942,7 @@ def auth_register(payload: AuthRegisterRequest) -> AuthTokenResponse:
 
     return AuthTokenResponse(
         access_token=create_access_token(user),
+        refresh_token=issue_refresh_session(user),
         user=AuthUserResponse(id=user.id, email=user.email, is_pro=user.is_pro),
     )
 
@@ -953,6 +959,25 @@ def auth_login(payload: AuthLoginRequest) -> AuthTokenResponse:
 
     return AuthTokenResponse(
         access_token=create_access_token(user),
+        refresh_token=issue_refresh_session(user),
+        user=AuthUserResponse(id=user.id, email=user.email, is_pro=user.is_pro),
+    )
+
+
+@app.post("/api/v1/auth/refresh", response_model=AuthTokenResponse)
+@app.post("/v1/auth/refresh", response_model=AuthTokenResponse)
+def auth_refresh(payload: AuthRefreshRequest) -> AuthTokenResponse:
+    try:
+        user, next_refresh_token = rotate_refresh_session(payload.refresh_token)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+        ) from exc
+
+    return AuthTokenResponse(
+        access_token=create_access_token(user),
+        refresh_token=next_refresh_token,
         user=AuthUserResponse(id=user.id, email=user.email, is_pro=user.is_pro),
     )
 
@@ -961,6 +986,13 @@ def auth_login(payload: AuthLoginRequest) -> AuthTokenResponse:
 @app.get("/v1/auth/me", response_model=AuthUserResponse)
 def auth_me(user: Annotated[AuthUser, Depends(get_current_user)]) -> AuthUserResponse:
     return AuthUserResponse(id=user.id, email=user.email, is_pro=user.is_pro)
+
+
+@app.post("/api/v1/auth/logout", response_model=AuthLogoutResponse)
+@app.post("/v1/auth/logout", response_model=AuthLogoutResponse)
+def auth_logout(payload: AuthRefreshRequest) -> AuthLogoutResponse:
+    revoke_refresh_session(payload.refresh_token)
+    return AuthLogoutResponse()
 
 
 @app.delete("/api/v1/auth/data", response_model=UserDataDeleteResponse)

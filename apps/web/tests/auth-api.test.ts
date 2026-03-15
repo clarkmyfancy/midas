@@ -4,6 +4,8 @@ import {
   deleteAccountData,
   getCurrentUser,
   loginWithApi,
+  logoutWithApi,
+  refreshSessionWithApi,
   registerWithApi,
   wipeLocalData,
 } from "../lib/auth-api";
@@ -17,6 +19,7 @@ describe("auth api", () => {
       return new Response(
         JSON.stringify({
           access_token: "token-abc",
+          refresh_token: "refresh-abc",
           token_type: "bearer",
           user: { email: "user@example.com", id: "user-1", is_pro: false },
         }),
@@ -33,6 +36,7 @@ describe("auth api", () => {
     );
 
     expect(session.accessToken).toBe("token-abc");
+    expect(session.refreshToken).toBe("refresh-abc");
     expect(session.user.email).toBe("user@example.com");
   });
 
@@ -41,6 +45,7 @@ describe("auth api", () => {
       return new Response(
         JSON.stringify({
           access_token: "token-login",
+          refresh_token: "refresh-login",
           token_type: "bearer",
           user: { email: "user@example.com", id: "user-1", is_pro: false },
         }),
@@ -58,6 +63,7 @@ describe("auth api", () => {
 
     expect(session).toEqual({
       accessToken: "token-login",
+      refreshToken: "refresh-login",
       user: { email: "user@example.com", id: "user-1", is_pro: false },
     });
   });
@@ -81,6 +87,52 @@ describe("auth api", () => {
     const user = await getCurrentUser("token-123", fetcher as typeof fetch);
 
     expect(user.email).toBe("user@example.com");
+  });
+
+  it("refreshes a session and rotates the refresh token", async () => {
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      expect(init?.method).toBe("POST");
+      expect(init?.body).toBe(JSON.stringify({ refresh_token: "refresh-123" }));
+
+      return new Response(
+        JSON.stringify({
+          access_token: "token-next",
+          refresh_token: "refresh-next",
+          token_type: "bearer",
+          user: { email: "user@example.com", id: "user-1", is_pro: false },
+        }),
+        {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        },
+      );
+    });
+
+    const response = await refreshSessionWithApi(
+      { refresh_token: "refresh-123" },
+      fetcher as typeof fetch,
+    );
+
+    expect(response.refresh_token).toBe("refresh-next");
+  });
+
+  it("logs out by revoking the refresh token", async () => {
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      expect(init?.method).toBe("POST");
+      expect(init?.body).toBe(JSON.stringify({ refresh_token: "refresh-123" }));
+
+      return new Response(JSON.stringify({ ok: true }), {
+        headers: { "Content-Type": "application/json" },
+        status: 200,
+      });
+    });
+
+    const response = await logoutWithApi(
+      { refresh_token: "refresh-123" },
+      fetcher as typeof fetch,
+    );
+
+    expect(response.ok).toBe(true);
   });
 
   it("deletes account data with the bearer token", async () => {

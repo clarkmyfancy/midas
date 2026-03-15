@@ -5,8 +5,10 @@ import hashlib
 import hmac
 import json
 import os
+import secrets
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from threading import Lock
 from typing import Annotated, Any
 from uuid import uuid4
@@ -22,7 +24,8 @@ except ImportError:  # pragma: no cover - local fallback until env is synced
 
 
 JWT_ALGORITHM = "HS256"
-JWT_TOKEN_TTL_SECONDS = 60 * 60 * 24 * 7
+ACCESS_TOKEN_TTL_SECONDS = 60 * 60 * 24
+REFRESH_TOKEN_TTL_DAYS = 30
 PBKDF2_ITERATIONS = 600_000
 
 
@@ -32,6 +35,17 @@ class AuthUser:
     email: str
     password_hash: str
     is_pro: bool
+
+
+@dataclass(frozen=True)
+class RefreshSessionRecord:
+    id: str
+    user_id: str
+    token_hash: str
+    expires_at: datetime
+    created_at: datetime
+    last_used_at: datetime
+    revoked_at: datetime | None
 
 
 class AuthStore:
@@ -195,12 +209,254 @@ class PostgresAuthStore(AuthStore):
         return psycopg.connect(self.db_uri)
 
 
+class RefreshSessionStore:
+    def setup(self) -> None:
+        raise NotImplementedError
+
+    def create_session(self, user_id: str) -> tuple[RefreshSessionRecord, str]:
+        raise NotImplementedError
+
+    def rotate_session(self, refresh_token: str) -> tuple[RefreshSessionRecord, str]:
+        raise NotImplementedError
+
+    def revoke_session(self, refresh_token: str) -> bool:
+        raise NotImplementedError
+
+
+class MemoryRefreshSessionStore(RefreshSessionStore):
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._sessions_by_id: dict[str, RefreshSessionRecord] = {}
+        self._session_id_by_token_hash: dict[str, str] = {}
+
+    def setup(self) -> None:
+        return None
+
+    def create_session(self, user_id: str) -> tuple[RefreshSessionRecord, str]:
+        with self._lock:
+            return self._create_session_locked(user_id, datetime.now(UTC))
+
+    def rotate_session(self, refresh_token: str) -> tuple[RefreshSessionRecord, str]:
+        token_hash = hash_refresh_token(refresh_token)
+        with self._lock:
+            session_id = self._session_id_by_token_hash.get(token_hash)
+            if session_id is None:
+                raise ValueError("Invalid refresh token")
+
+            current = self._sessions_by_id[session_id]
+            now = datetime.now(UTC)
+            if current.revoked_at is not None or current.expires_at <= now:
+                raise ValueError("Refresh token expired")
+
+            self._sessions_by_id[current.id] = RefreshSessionRecord(
+                id=current.id,
+                user_id=current.user_id,
+                token_hash=current.token_hash,
+                expires_at=current.expires_at,
+                created_at=current.created_at,
+                last_used_at=now,
+                revoked_at=now,
+            )
+            return self._create_session_locked(current.user_id, now)
+
+    def revoke_session(self, refresh_token: str) -> bool:
+        token_hash = hash_refresh_token(refresh_token)
+        with self._lock:
+            session_id = self._session_id_by_token_hash.get(token_hash)
+            if session_id is None:
+                return False
+
+            current = self._sessions_by_id[session_id]
+            if current.revoked_at is not None:
+                return False
+
+            now = datetime.now(UTC)
+            self._sessions_by_id[current.id] = RefreshSessionRecord(
+                id=current.id,
+                user_id=current.user_id,
+                token_hash=current.token_hash,
+                expires_at=current.expires_at,
+                created_at=current.created_at,
+                last_used_at=now,
+                revoked_at=now,
+            )
+            return True
+
+    def reset(self) -> None:
+        with self._lock:
+            self._sessions_by_id.clear()
+            self._session_id_by_token_hash.clear()
+
+    def _create_session_locked(
+        self,
+        user_id: str,
+        now: datetime,
+    ) -> tuple[RefreshSessionRecord, str]:
+        refresh_token = generate_refresh_token()
+        session = RefreshSessionRecord(
+            id=str(uuid4()),
+            user_id=user_id,
+            token_hash=hash_refresh_token(refresh_token),
+            expires_at=now + timedelta(days=REFRESH_TOKEN_TTL_DAYS),
+            created_at=now,
+            last_used_at=now,
+            revoked_at=None,
+        )
+        self._sessions_by_id[session.id] = session
+        self._session_id_by_token_hash[session.token_hash] = session.id
+        return session, refresh_token
+
+
+class PostgresRefreshSessionStore(RefreshSessionStore):
+    def __init__(self, db_uri: str) -> None:
+        self.db_uri = db_uri
+
+    def setup(self) -> None:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS auth_refresh_sessions (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    token_hash TEXT NOT NULL UNIQUE,
+                    expires_at TIMESTAMPTZ NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL,
+                    last_used_at TIMESTAMPTZ NOT NULL,
+                    revoked_at TIMESTAMPTZ
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_auth_refresh_sessions_user_id
+                ON auth_refresh_sessions (user_id, created_at DESC)
+                """
+            )
+            conn.commit()
+
+    def create_session(self, user_id: str) -> tuple[RefreshSessionRecord, str]:
+        with self._connect() as conn, conn.cursor() as cur:
+            session, refresh_token = self._create_session(cur, user_id=user_id, now=datetime.now(UTC))
+            conn.commit()
+        return session, refresh_token
+
+    def rotate_session(self, refresh_token: str) -> tuple[RefreshSessionRecord, str]:
+        token_hash = hash_refresh_token(refresh_token)
+        now = datetime.now(UTC)
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, user_id, token_hash, expires_at, created_at, last_used_at, revoked_at
+                FROM auth_refresh_sessions
+                WHERE token_hash = %s
+                """,
+                (token_hash,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise ValueError("Invalid refresh token")
+
+            current = self._build_refresh_session(row)
+            if current.revoked_at is not None or current.expires_at <= now:
+                raise ValueError("Refresh token expired")
+
+            cur.execute(
+                """
+                UPDATE auth_refresh_sessions
+                SET last_used_at = %s, revoked_at = %s
+                WHERE id = %s
+                """,
+                (now, now, current.id),
+            )
+            session, next_refresh_token = self._create_session(cur, user_id=current.user_id, now=now)
+            conn.commit()
+        return session, next_refresh_token
+
+    def revoke_session(self, refresh_token: str) -> bool:
+        token_hash = hash_refresh_token(refresh_token)
+        now = datetime.now(UTC)
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE auth_refresh_sessions
+                SET last_used_at = %s, revoked_at = %s
+                WHERE token_hash = %s AND revoked_at IS NULL
+                """,
+                (now, now, token_hash),
+            )
+            updated = cur.rowcount > 0
+            conn.commit()
+        return updated
+
+    def _create_session(
+        self,
+        cur,
+        *,
+        user_id: str,
+        now: datetime,
+    ) -> tuple[RefreshSessionRecord, str]:
+        refresh_token = generate_refresh_token()
+        session = RefreshSessionRecord(
+            id=str(uuid4()),
+            user_id=user_id,
+            token_hash=hash_refresh_token(refresh_token),
+            expires_at=now + timedelta(days=REFRESH_TOKEN_TTL_DAYS),
+            created_at=now,
+            last_used_at=now,
+            revoked_at=None,
+        )
+        cur.execute(
+            """
+            INSERT INTO auth_refresh_sessions (
+                id, user_id, token_hash, expires_at, created_at, last_used_at, revoked_at
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                session.id,
+                session.user_id,
+                session.token_hash,
+                session.expires_at,
+                session.created_at,
+                session.last_used_at,
+                session.revoked_at,
+            ),
+        )
+        return session, refresh_token
+
+    def _build_refresh_session(self, row: tuple[object, ...]) -> RefreshSessionRecord:
+        return RefreshSessionRecord(
+            id=str(row[0]),
+            user_id=str(row[1]),
+            token_hash=str(row[2]),
+            expires_at=row[3],
+            created_at=row[4],
+            last_used_at=row[5],
+            revoked_at=row[6],
+        )
+
+    def _connect(self):
+        if psycopg is None:  # pragma: no cover
+            raise RuntimeError("psycopg is not installed")
+        return psycopg.connect(self.db_uri)
+
+
 _store_lock = Lock()
 _store: AuthStore | None = None
+_refresh_store_lock = Lock()
+_refresh_store: RefreshSessionStore | None = None
 
 
 def normalize_email(email: str) -> str:
     return email.strip().lower()
+
+
+def hash_refresh_token(refresh_token: str) -> str:
+    return hashlib.sha256(refresh_token.encode("utf-8")).hexdigest()
+
+
+def generate_refresh_token() -> str:
+    return secrets.token_urlsafe(48)
 
 
 def hash_password(password: str) -> str:
@@ -257,7 +513,7 @@ def create_access_token(user: AuthUser) -> str:
         "sub": user.id,
         "email": user.email,
         "is_pro": user.is_pro,
-        "exp": int(time.time()) + JWT_TOKEN_TTL_SECONDS,
+        "exp": int(time.time()) + ACCESS_TOKEN_TTL_SECONDS,
     }
     signing_input = ".".join(
         [
@@ -324,8 +580,30 @@ def get_auth_store() -> AuthStore:
         return _store
 
 
+def get_refresh_session_store() -> RefreshSessionStore:
+    global _refresh_store
+
+    if _refresh_store is not None:
+        return _refresh_store
+
+    with _refresh_store_lock:
+        if _refresh_store is not None:
+            return _refresh_store
+
+        db_uri = os.getenv("POSTGRES_URI")
+        if db_uri and psycopg is not None:
+            store: RefreshSessionStore = PostgresRefreshSessionStore(db_uri)
+        else:
+            store = MemoryRefreshSessionStore()
+
+        store.setup()
+        _refresh_store = store
+        return _refresh_store
+
+
 def init_auth_storage() -> None:
     get_auth_store()
+    get_refresh_session_store()
 
 
 def register_user(email: str, password: str) -> AuthUser:
@@ -334,6 +612,23 @@ def register_user(email: str, password: str) -> AuthUser:
 
 def login_user(email: str, password: str) -> AuthUser | None:
     return get_auth_store().authenticate_user(email, password)
+
+
+def issue_refresh_session(user: AuthUser) -> str:
+    _session, refresh_token = get_refresh_session_store().create_session(user.id)
+    return refresh_token
+
+
+def rotate_refresh_session(refresh_token: str) -> tuple[AuthUser, str]:
+    session, next_refresh_token = get_refresh_session_store().rotate_session(refresh_token)
+    user = get_auth_store().get_user_by_id(session.user_id)
+    if user is None:
+        raise ValueError("User not found for refresh token")
+    return user, next_refresh_token
+
+
+def revoke_refresh_session(refresh_token: str) -> bool:
+    return get_refresh_session_store().revoke_session(refresh_token)
 
 
 def optional_current_user(
@@ -403,8 +698,12 @@ def requires_entitlement(feature_key: str):
 
 
 def reset_auth_storage_for_tests() -> None:
-    global _store
+    global _store, _refresh_store
     if isinstance(_store, MemoryAuthStore):
         _store.reset()
     else:
         _store = None
+    if isinstance(_refresh_store, MemoryRefreshSessionStore):
+        _refresh_store.reset()
+    else:
+        _refresh_store = None

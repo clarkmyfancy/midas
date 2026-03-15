@@ -13,13 +13,17 @@ from midas.core.projections import (
 client = TestClient(app)
 
 
-def register_and_login() -> str:
+def register_and_login_payload() -> dict:
     response = client.post(
         "/v1/auth/register",
         json={"email": "user@example.com", "password": "supersecret"},
     )
     assert response.status_code == 200
-    return response.json()["access_token"]
+    return response.json()
+
+
+def register_and_login() -> str:
+    return register_and_login_payload()["access_token"]
 
 
 def test_healthcheck() -> None:
@@ -37,6 +41,7 @@ def test_auth_register_and_login() -> None:
 
     assert register_response.status_code == 200
     assert register_response.json()["token_type"] == "bearer"
+    assert register_response.json()["refresh_token"]
 
     login_response = client.post(
         "/v1/auth/login",
@@ -45,6 +50,37 @@ def test_auth_register_and_login() -> None:
 
     assert login_response.status_code == 200
     assert login_response.json()["user"]["email"] == "user@example.com"
+    assert login_response.json()["refresh_token"]
+
+
+def test_auth_refresh_rotates_refresh_token() -> None:
+    auth_payload = register_and_login_payload()
+
+    refresh_response = client.post(
+        "/v1/auth/refresh",
+        json={"refresh_token": auth_payload["refresh_token"]},
+    )
+
+    assert refresh_response.status_code == 200
+    assert refresh_response.json()["user"]["email"] == "user@example.com"
+    assert refresh_response.json()["refresh_token"] != auth_payload["refresh_token"]
+
+
+def test_auth_logout_revokes_refresh_token() -> None:
+    auth_payload = register_and_login_payload()
+
+    logout_response = client.post(
+        "/v1/auth/logout",
+        json={"refresh_token": auth_payload["refresh_token"]},
+    )
+    refresh_response = client.post(
+        "/v1/auth/refresh",
+        json={"refresh_token": auth_payload["refresh_token"]},
+    )
+
+    assert logout_response.status_code == 200
+    assert logout_response.json() == {"ok": True}
+    assert refresh_response.status_code == 401
 
 
 def test_auth_me_returns_current_user() -> None:

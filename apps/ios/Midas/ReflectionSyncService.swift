@@ -38,6 +38,7 @@ final class ReflectionSyncService {
     }
 
     func streamReflection(
+        accessToken: String,
         journalEntry: String,
         goals: [String],
         healthSummary: HealthSummary
@@ -48,6 +49,7 @@ final class ReflectionSyncService {
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         request.httpBody = try encoder.encode(

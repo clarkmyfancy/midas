@@ -1,6 +1,14 @@
 import SwiftUI
 
 struct ContentView: View {
+    private enum AuthMode: String, CaseIterable, Identifiable {
+        case login = "Sign In"
+        case register = "Create Account"
+
+        var id: String { rawValue }
+    }
+
+    private let authService = AuthService()
     private let healthKitService = HealthKitService()
     private let reflectionSyncService = ReflectionSyncService()
 
@@ -9,6 +17,12 @@ struct ContentView: View {
         "weekly_reflection": false,
         "mental_model_graph": false,
     ]
+    @State private var authMode: AuthMode = .login
+    @State private var authSession: AuthSession?
+    @State private var email = ""
+    @State private var password = ""
+    @State private var authStatus = "Sign in to sync reflections with the API."
+    @State private var isAuthenticating = false
     @State private var journalEntry = "I want to understand how my recovery and nervous system are aligning with how I felt this week."
     @State private var healthSummary: HealthSummary?
     @State private var reflectionSummary = ""
@@ -27,6 +41,68 @@ struct ContentView: View {
                         .foregroundStyle(.secondary)
                     Text("This starter app is ready for HealthKit, App Intents, and conversational journaling flows.")
                         .font(.body)
+
+                    VStack(alignment: .leading, spacing: 14) {
+                        Text("Account")
+                            .font(.headline)
+
+                        Picker("Account mode", selection: $authMode) {
+                            ForEach(AuthMode.allCases) { mode in
+                                Text(mode.rawValue).tag(mode)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+
+                        TextField("you@example.com", text: $email)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .textFieldStyle(.roundedBorder)
+
+                        SecureField("Password", text: $password)
+                            .textFieldStyle(.roundedBorder)
+
+                        Button {
+                            Task {
+                                await authenticate()
+                            }
+                        } label: {
+                            HStack {
+                                if isAuthenticating {
+                                    ProgressView()
+                                        .tint(.white)
+                                }
+                                Text(isAuthenticating ? "Submitting..." : authMode.rawValue)
+                            }
+                            .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(isAuthenticating || email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || password.count < 8)
+
+                        if let authSession {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(authSession.user.email)
+                                        .font(.subheadline.weight(.semibold))
+                                    Text(authSession.user.isPro ? "Pro account" : "Core account")
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                }
+
+                                Spacer()
+
+                                Button("Log Out") {
+                                    logout()
+                                }
+                            }
+                        }
+
+                        Text(authStatus)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24))
 
                     VStack(alignment: .leading, spacing: 14) {
                         Text("HealthKit Sync")
@@ -53,7 +129,7 @@ struct ContentView: View {
                             .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.borderedProminent)
-                        .disabled(isSyncingReflection)
+                        .disabled(isSyncingReflection || authSession == nil)
 
                         Text(syncStatus)
                             .font(.footnote)
@@ -119,18 +195,77 @@ struct ContentView: View {
             }
         }
         .task {
+            await restoreSession()
+        }
+        .task(id: authSession?.user.id) {
             await loadCapabilities()
         }
     }
 
+    @MainActor
+    private func restoreSession() async {
+        authSession = await authService.restoreSession()
+        if let authSession {
+            authStatus = "Signed in as \(authSession.user.email)."
+            email = authSession.user.email
+        } else {
+            authStatus = "Sign in to sync reflections with the API."
+        }
+    }
+
+    @MainActor
+    private func authenticate() async {
+        isAuthenticating = true
+        defer { isAuthenticating = false }
+
+        do {
+            let normalizedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+            let session = try await {
+                switch authMode {
+                case .login:
+                    return try await authService.login(email: normalizedEmail, password: password)
+                case .register:
+                    return try await authService.register(email: normalizedEmail, password: password)
+                }
+            }()
+            authSession = session
+            authStatus = "Signed in as \(session.user.email)."
+            await loadCapabilities()
+        } catch {
+            authStatus = error.localizedDescription
+        }
+    }
+
     private func loadCapabilities() async {
+        guard let currentSession = authSession else {
+            await MainActor.run {
+                capabilityMap = [
+                    "pro_analytics": false,
+                    "weekly_reflection": false,
+                    "mental_model_graph": false,
+                ]
+            }
+            return
+        }
+
         guard let url = URL(string: "\(apiBaseURL)/v1/capabilities") else {
             return
         }
 
         do {
-            let (data, response) = try await URLSession.shared.data(from: url)
+            var request = URLRequest(url: url)
+            request.setValue("Bearer \(currentSession.accessToken)", forHTTPHeaderField: "Authorization")
+            let (data, response) = try await URLSession.shared.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+                if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 401 {
+                    let restoredSession = await authService.restoreSession()
+                    await MainActor.run {
+                        authSession = restoredSession
+                        if restoredSession == nil {
+                            logoutLocally(status: "Your session expired. Sign in again.")
+                        }
+                    }
+                }
                 return
             }
 
@@ -156,28 +291,78 @@ struct ContentView: View {
 
     @MainActor
     private func syncReflection() async {
+        guard let authSession else {
+            syncStatus = "Sign in before syncing reflections."
+            return
+        }
+
         isSyncingReflection = true
         syncStatus = "Requesting HealthKit access..."
         reflectionSummary = ""
+        var healthSnapshot: HealthSummary?
 
         do {
             try await healthKitService.requestAuthorization()
             syncStatus = "Fetching the last 7 days of sleep and HRV..."
             let summary = try await healthKitService.fetchLast7DaySummary()
             healthSummary = summary
+            healthSnapshot = summary
 
             syncStatus = "Streaming reflection from the backend..."
             reflectionSummary = try await reflectionSyncService.streamReflection(
+                accessToken: authSession.accessToken,
                 journalEntry: journalEntry,
                 goals: [],
                 healthSummary: summary
             )
             syncStatus = "Synced the last 7 days of HealthKit sleep and HRV."
         } catch {
-            syncStatus = error.localizedDescription
+            if case ReflectionSyncServiceError.unexpectedStatusCode(401) = error,
+               let summary = healthSnapshot,
+               let restoredSession = await authService.restoreSession() {
+                self.authSession = restoredSession
+                do {
+                    reflectionSummary = try await reflectionSyncService.streamReflection(
+                        accessToken: restoredSession.accessToken,
+                        journalEntry: journalEntry,
+                        goals: [],
+                        healthSummary: summary
+                    )
+                    syncStatus = "Synced the last 7 days of HealthKit sleep and HRV."
+                    isSyncingReflection = false
+                    return
+                } catch {
+                    syncStatus = error.localizedDescription
+                }
+            } else {
+                syncStatus = error.localizedDescription
+            }
         }
 
         isSyncingReflection = false
+    }
+
+    @MainActor
+    private func logout() {
+        let currentSession = authSession
+        Task {
+            await authService.logout(currentSession: currentSession)
+        }
+        logoutLocally(status: "Signed out.")
+    }
+
+    @MainActor
+    private func logoutLocally(status: String) {
+        authSession = nil
+        capabilityMap = [
+            "pro_analytics": false,
+            "weekly_reflection": false,
+            "mental_model_graph": false,
+        ]
+        reflectionSummary = ""
+        healthSummary = nil
+        syncStatus = "Health data not synced yet."
+        authStatus = status
     }
 
     private func formattedSleepHours(_ hours: Double?) -> String {

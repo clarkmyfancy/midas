@@ -2,6 +2,8 @@
 
 from app.schemas.auth import (
     AuthLoginRequest,
+    AuthLogoutResponse,
+    AuthRefreshRequest,
     AuthRegisterRequest,
     AuthTokenResponse,
     AuthUserResponse,
@@ -50,8 +52,10 @@ SCHEMA_MODELS = [
     CapabilityMapResponse,
     AuthRegisterRequest,
     AuthLoginRequest,
+    AuthRefreshRequest,
     AuthUserResponse,
     AuthTokenResponse,
+    AuthLogoutResponse,
     ChatMessageResponse,
     ChatThreadSummaryResponse,
     ChatThreadListResponse,
@@ -88,7 +92,9 @@ SCHEMA_MODELS = [
 __all__ = [
     "AuthLoginRequest",
     "AuthRegisterRequest",
+    "AuthRefreshRequest",
     "AuthTokenResponse",
+    "AuthLogoutResponse",
     "AuthUserResponse",
     "CapabilityMapResponse",
     "ChatMessageResponse",
