@@ -14,6 +14,7 @@ from langchain_core.messages import AIMessageChunk
 import app.main as app_main
 from midas.core.loader import load_capabilities
 from midas.core.entitlements import reset_auth_storage_for_tests
+import midas.core.audit as audit_module
 import midas.core.insights as insights_module
 import midas.core.projections as projections_module
 from midas.core.memory import reset_memory_storage_for_tests
@@ -39,6 +40,8 @@ def stub_habit_analyst_chain(monkeypatch):
     load_capabilities(force=True)
     monkeypatch.setattr(projections_module, "WeaviateProjector", InMemoryTestWeaviateProjector)
     monkeypatch.setattr(projections_module, "GraphProjector", InMemoryTestGraphProjector)
+    monkeypatch.setattr(audit_module, "WeaviateProjector", InMemoryTestWeaviateProjector)
+    monkeypatch.setattr(audit_module, "GraphProjector", InMemoryTestGraphProjector)
     monkeypatch.setattr(insights_module, "WeaviateProjector", InMemoryTestWeaviateProjector)
     monkeypatch.setattr(insights_module, "GraphProjector", InMemoryTestGraphProjector)
     monkeypatch.setattr(app_main, "WeaviateProjector", InMemoryTestWeaviateProjector)

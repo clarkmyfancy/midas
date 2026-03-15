@@ -200,6 +200,10 @@ Important variables:
 - `OPENAI_API_KEY`
   - Needed for live LLM-backed reflection/chat behavior and model-based extraction.
   - If this is missing, some behavior falls back to heuristics and some chat/reflection quality degrades.
+- `MIDAS_CORS_ORIGINS`
+  - Comma-separated list of browser origins allowed to call the backend.
+  - Defaults to the local web app origins on `localhost:3000` and `127.0.0.1:3000`.
+  - Set this for separate frontend and backend deployments such as Heroku apps on different domains.
 - `POSTGRES_URI`
   - Tells the backend how to connect to the local Postgres container.
 - `WEAVIATE_URL`

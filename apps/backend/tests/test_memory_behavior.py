@@ -5,6 +5,7 @@ from midas.core.memory import (
     PROJECTION_TYPES,
     WEAVIATE_PROJECTION_TYPES,
 )
+from tests.fakes import InMemoryTestWeaviateProjector
 
 
 client = TestClient(app)
@@ -143,6 +144,78 @@ def test_manual_projection_run_ignores_split_auto_projection_flags(monkeypatch) 
     )
     assert run_response.status_code == 200
     assert {job["projection_type"] for job in run_response.json()["jobs"]} == set(PROJECTION_TYPES)
+
+
+def test_memory_audit_reports_store_health(monkeypatch) -> None:
+    monkeypatch.setenv("MIDAS_AUTO_PROJECT", "0")
+    access_token = register_user("audit@example.com")
+
+    create_response = client.post(
+        "/v1/journal-entries",
+        json={"journal_entry": "Audit health check.", "goals": []},
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert create_response.status_code == 200
+
+    run_response = client.post(
+        "/v1/projection-jobs/run?limit=10",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert run_response.status_code == 200
+
+    audit_response = client.get(
+        "/v1/memory/audit",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+
+    assert audit_response.status_code == 200
+    payload = audit_response.json()
+    assert payload["total_entries"] == 1
+    assert payload["failed_jobs"] == 0
+    stores = {store["store"]: store for store in payload["stores"]}
+    assert stores["weaviate"]["status"] == "ok"
+    assert stores["neo4j"]["status"] == "ok"
+    assert stores["weaviate"]["missing_completed_artifacts"] == 0
+    assert stores["neo4j"]["missing_completed_artifacts"] == 0
+
+
+def test_memory_audit_flags_missing_completed_artifacts(monkeypatch) -> None:
+    monkeypatch.setenv("MIDAS_AUTO_PROJECT", "0")
+    access_token = register_user("audit-drift@example.com")
+
+    create_response = client.post(
+        "/v1/journal-entries",
+        json={"journal_entry": "Audit drift check.", "goals": []},
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert create_response.status_code == 200
+    entry_id = create_response.json()["entry"]["id"]
+    weaviate_job_id = next(
+        job["id"]
+        for job in create_response.json()["projection_jobs"]
+        if job["projection_type"].startswith("weaviate_")
+    )
+
+    run_response = client.post(
+        "/v1/projection-jobs/run?limit=10",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert run_response.status_code == 200
+
+    InMemoryTestWeaviateProjector.objects.pop(weaviate_job_id, None)
+
+    audit_response = client.get(
+        "/v1/memory/audit",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+
+    assert audit_response.status_code == 200
+    payload = audit_response.json()
+    stores = {store["store"]: store for store in payload["stores"]}
+    assert stores["weaviate"]["status"] == "attention"
+    assert stores["weaviate"]["missing_completed_artifacts"] == 1
+    assert stores["weaviate"]["missing_job_ids"] == [weaviate_job_id]
+    assert payload["drifted_entry_ids"] == [entry_id]
 
 
 def test_clarification_task_list_defaults_to_pending_items(monkeypatch) -> None:

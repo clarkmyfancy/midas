@@ -2,6 +2,7 @@
 
 import type {
   MemorySettingsResponse,
+  MemoryAuditResponse,
   JournalEntryResponse,
   MemoryDebugResponse,
   ProjectionJobResponse,
@@ -13,6 +14,7 @@ import { ApiError } from "../lib/api";
 import {
   deleteJournalEntry,
   createJournalEntry,
+  getMemoryAudit,
   getMemorySettings,
   getMemoryDebug,
   listJournalEntries,
@@ -32,6 +34,7 @@ export function MemoryPageShell() {
   const [jobs, setJobs] = useState<ProjectionJobResponse[]>([]);
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null);
   const [debugPayload, setDebugPayload] = useState<MemoryDebugResponse | null>(null);
+  const [audit, setAudit] = useState<MemoryAuditResponse | null>(null);
   const [settings, setSettings] = useState<MemorySettingsResponse | null>(null);
   const [journalEntry, setJournalEntry] = useState(
     "I stayed up late for work, slept badly, and skipped my workout.",
@@ -40,6 +43,7 @@ export function MemoryPageShell() {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isCheckingProjections, setIsCheckingProjections] = useState(false);
 
   useEffect(() => {
     if (isReady && !session) {
@@ -55,14 +59,16 @@ export function MemoryPageShell() {
     setIsLoading(true);
     setError(null);
     try {
-      const [entryResponse, jobResponse] = await Promise.all([
+      const [entryResponse, jobResponse, settingsResponse, auditResponse] = await Promise.all([
         listJournalEntries(session.accessToken),
         listProjectionJobs(session.accessToken),
+        getMemorySettings(session.accessToken),
+        getMemoryAudit(session.accessToken),
       ]);
-      const settingsResponse = await getMemorySettings(session.accessToken);
       setEntries(entryResponse.entries);
       setJobs(jobResponse.projection_jobs);
       setSettings(settingsResponse);
+      setAudit(auditResponse);
 
       const nextEntryId = selectedEntryId ?? entryResponse.entries[0]?.id ?? null;
       setSelectedEntryId(nextEntryId);
@@ -134,6 +140,31 @@ export function MemoryPageShell() {
       await refresh();
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : "Failed to run projection jobs.");
+    }
+  }
+
+  async function handleCheckProjections() {
+    if (!session) {
+      return;
+    }
+
+    setError(null);
+    setIsCheckingProjections(true);
+    setStatusMessage("Checking projection health...");
+    try {
+      const [jobResponse, auditResponse] = await Promise.all([
+        listProjectionJobs(session.accessToken),
+        getMemoryAudit(session.accessToken),
+      ]);
+      setJobs(jobResponse.projection_jobs);
+      setAudit(auditResponse);
+      setStatusMessage(
+        `Projection health checked. Pending ${auditResponse.pending_jobs}, failed ${auditResponse.failed_jobs}, drifted entries ${auditResponse.drifted_entry_ids.length}.`,
+      );
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "Failed to check projection health.");
+    } finally {
+      setIsCheckingProjections(false);
     }
   }
 
@@ -323,6 +354,44 @@ export function MemoryPageShell() {
             ))}
           </div>
         </section>
+      </section>
+
+      <section className="panel memory-links-panel">
+        <h2>Projection health</h2>
+        <div className="memory-actions">
+          <button
+            className="button button-secondary"
+            disabled={isCheckingProjections}
+            onClick={handleCheckProjections}
+            type="button"
+          >
+            {isCheckingProjections ? "Checking..." : "Check Projections"}
+          </button>
+        </div>
+        <p className="memory-small-copy">
+          Entries: {audit?.total_entries ?? 0} | Jobs: {audit?.total_projection_jobs ?? 0} | Pending: {audit?.pending_jobs ?? 0} | Failed:{" "}
+          {audit?.failed_jobs ?? 0}
+        </p>
+        <p className="memory-small-copy">Drifted entries: {audit?.drifted_entry_ids.length ?? 0}</p>
+        <div className="memory-job-list">
+          {audit?.stores.map((store) => (
+            <article className="memory-job-card" key={store.store}>
+              <strong>{store.store}</strong>
+              <span className={`memory-job-status memory-job-status-${store.status === "ok" ? "completed" : "failed"}`}>
+                {store.status}
+              </span>
+              <span>
+                completed {store.completed_jobs} / total {store.total_jobs}
+              </span>
+              <span>
+                present {store.present_artifacts} / missing completed {store.missing_completed_artifacts}
+              </span>
+              <span>
+                pending {store.pending_jobs} / failed {store.failed_jobs}
+              </span>
+            </article>
+          )) ?? null}
+        </div>
       </section>
 
       <section className="panel memory-debug-panel">

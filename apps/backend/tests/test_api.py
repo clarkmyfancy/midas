@@ -1,4 +1,5 @@
 import pytest
+import app.main as app_main
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -40,6 +41,27 @@ def test_healthcheck() -> None:
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_resolve_cors_origins_defaults_to_localhost(monkeypatch) -> None:
+    monkeypatch.delenv("MIDAS_CORS_ORIGINS", raising=False)
+
+    assert app_main.resolve_cors_origins() == [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ]
+
+
+def test_resolve_cors_origins_reads_csv_configuration(monkeypatch) -> None:
+    monkeypatch.setenv(
+        "MIDAS_CORS_ORIGINS",
+        "https://midas-web.herokuapp.com, https://midas-api.herokuapp.com",
+    )
+
+    assert app_main.resolve_cors_origins() == [
+        "https://midas-web.herokuapp.com",
+        "https://midas-api.herokuapp.com",
+    ]
 
 
 def test_auth_register_and_login() -> None:

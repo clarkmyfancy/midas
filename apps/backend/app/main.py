@@ -61,11 +61,14 @@ from app.schemas.journal import (
     UserDataDeleteResponse,
     MemorySettingsResponse,
     MemoryDebugResponse,
+    MemoryAuditResponse,
     ProjectionJobListResponse,
     ProjectionJobResponse,
+    ProjectionStoreAuditResponse,
     ProjectionRunResponse,
     WeaviateArtifactResponse,
 )
+from midas.core.audit import build_memory_projection_audit
 from app.schemas.review import ReviewFindingResponse, ReviewStatResponse, WeeklyReviewResponse
 from app.schemas.reflection import ReflectionRequest
 from midas.core.entitlements import (
@@ -119,6 +122,19 @@ from midas.core.review import build_weekly_review
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_CORS_ORIGINS = (
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+)
+
+
+def resolve_cors_origins() -> list[str]:
+    configured = os.getenv("MIDAS_CORS_ORIGINS", "")
+    origins = [origin.strip() for origin in configured.split(",") if origin.strip()]
+    if origins:
+        return origins
+    return list(DEFAULT_CORS_ORIGINS)
+
 @asynccontextmanager
 async def app_lifespan(_: FastAPI):
     try:
@@ -139,10 +155,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ],
+    allow_origins=resolve_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -271,6 +284,22 @@ def serialize_graph_relationship(relationship: dict[str, object]) -> GraphRelati
         start_node_id=str(relationship.get("startNode", "")),
         end_node_id=str(relationship.get("endNode", "")),
         properties=dict(relationship.get("properties", {})),
+    )
+
+
+def serialize_projection_store_audit(store_audit) -> ProjectionStoreAuditResponse:
+    return ProjectionStoreAuditResponse(
+        store=store_audit.store,
+        status=store_audit.status,
+        total_jobs=store_audit.total_jobs,
+        completed_jobs=store_audit.completed_jobs,
+        pending_jobs=store_audit.pending_jobs,
+        failed_jobs=store_audit.failed_jobs,
+        present_artifacts=store_audit.present_artifacts,
+        missing_completed_artifacts=store_audit.missing_completed_artifacts,
+        affected_entry_ids=store_audit.affected_entry_ids,
+        missing_job_ids=store_audit.missing_job_ids,
+        failed_job_ids=store_audit.failed_job_ids,
     )
 
 
@@ -866,6 +895,23 @@ def run_projection_jobs(
         completed_jobs=result.completed_jobs,
         failed_jobs=result.failed_jobs,
         jobs=[serialize_projection_job(job) for job in result.jobs],
+    )
+
+
+@app.get("/api/v1/memory/audit", response_model=MemoryAuditResponse)
+@app.get("/v1/memory/audit", response_model=MemoryAuditResponse)
+def memory_audit(
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> MemoryAuditResponse:
+    audit = build_memory_projection_audit(user.id)
+    return MemoryAuditResponse(
+        total_entries=audit.total_entries,
+        total_projection_jobs=audit.total_projection_jobs,
+        completed_jobs=audit.completed_jobs,
+        pending_jobs=audit.pending_jobs,
+        failed_jobs=audit.failed_jobs,
+        drifted_entry_ids=audit.drifted_entry_ids,
+        stores=[serialize_projection_store_audit(store) for store in audit.stores],
     )
 
 

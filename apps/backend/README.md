@@ -48,6 +48,7 @@ This assumes:
 - `POST /v1/reflections`: reflection/chat entrypoint
 - `GET /v1/clarifications`: pending clarification prompts
 - `POST /v1/projection-jobs/run`: manually run queued projection jobs
+- `GET /v1/memory/audit`: operator-facing audit of projection job health versus derived artifacts
 
 ## Generate shared types
 

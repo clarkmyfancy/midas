@@ -3,6 +3,7 @@ import type {
   JournalEntryCreateRequest,
   JournalEntryListResponse,
   JournalIngestResponse,
+  MemoryAuditResponse,
   MemorySettingsResponse,
   MemoryDebugResponse,
   ProjectionJobListResponse,
@@ -89,6 +90,17 @@ export function getMemoryDebug(
 ) {
   return requestJson<MemoryDebugResponse>(
     `/api/v1/journal-entries/${entryId}/debug`,
+    {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      method: "GET",
+    },
+    fetcher,
+  );
+}
+
+export function getMemoryAudit(accessToken: string, fetcher: typeof fetch = fetch) {
+  return requestJson<MemoryAuditResponse>(
+    "/api/v1/memory/audit",
     {
       headers: { Authorization: `Bearer ${accessToken}` },
       method: "GET",

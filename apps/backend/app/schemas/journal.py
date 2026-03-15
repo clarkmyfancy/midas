@@ -169,3 +169,27 @@ class MemoryDebugResponse(BaseModel):
     graph: GraphObservationResponse
     settings: MemorySettingsResponse
     links: dict[str, str]
+
+
+class ProjectionStoreAuditResponse(BaseModel):
+    store: str
+    status: str
+    total_jobs: int
+    completed_jobs: int
+    pending_jobs: int
+    failed_jobs: int
+    present_artifacts: int
+    missing_completed_artifacts: int
+    affected_entry_ids: list[str]
+    missing_job_ids: list[str]
+    failed_job_ids: list[str]
+
+
+class MemoryAuditResponse(BaseModel):
+    total_entries: int
+    total_projection_jobs: int
+    completed_jobs: int
+    pending_jobs: int
+    failed_jobs: int
+    drifted_entry_ids: list[str]
+    stores: list[ProjectionStoreAuditResponse]

@@ -197,6 +197,16 @@ export interface LocalDataWipeResponse {
   cleanup: DerivedStoreCleanupResponse[];
 }
 
+export interface MemoryAuditResponse {
+  total_entries: number;
+  total_projection_jobs: number;
+  completed_jobs: number;
+  pending_jobs: number;
+  failed_jobs: number;
+  drifted_entry_ids: string[];
+  stores: ProjectionStoreAuditResponse[];
+}
+
 export interface MemoryDebugResponse {
   entry: JournalEntryResponse;
   projection_jobs: ProjectionJobResponse[];
@@ -234,6 +244,20 @@ export interface ProjectionRunResponse {
   completed_jobs: number;
   failed_jobs: number;
   jobs: ProjectionJobResponse[];
+}
+
+export interface ProjectionStoreAuditResponse {
+  store: string;
+  status: string;
+  total_jobs: number;
+  completed_jobs: number;
+  pending_jobs: number;
+  failed_jobs: number;
+  present_artifacts: number;
+  missing_completed_artifacts: number;
+  affected_entry_ids: string[];
+  missing_job_ids: string[];
+  failed_job_ids: string[];
 }
 
 export interface ReflectionRequest {
