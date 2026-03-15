@@ -200,6 +200,83 @@ def test_weaviate_request_headers_use_bearer_token(monkeypatch) -> None:
     assert weaviate_request_headers() == {"Authorization": "Bearer sandbox-key"}
 
 
+def test_graph_projector_defaults_to_legacy_http_endpoint(monkeypatch) -> None:
+    calls: list[tuple[str, str, dict | None, dict[str, str] | None]] = []
+
+    def fake_call_json_api(method: str, url: str, *, payload=None, headers=None):
+        calls.append((method, url, payload, headers))
+        return {
+            "results": [
+                {
+                    "data": [
+                        {
+                            "row": ["josh", "Josh", ["Josh"], 0.92, 3],
+                        }
+                    ]
+                }
+            ]
+        }
+
+    monkeypatch.setattr("midas.core.projections.call_json_api", fake_call_json_api)
+
+    projector = GraphProjector(
+        base_url="http://127.0.0.1:7474",
+        username="neo4j",
+        password="secret-password",
+    )
+    rows = projector.list_entities("user-1", "person")
+
+    assert rows[0]["canonical_name"] == "josh"
+    assert calls[0][1] == "http://127.0.0.1:7474/db/neo4j/tx/commit"
+    assert calls[0][3] and calls[0][3]["Authorization"].startswith("Basic ")
+
+
+def test_graph_projector_uses_query_api_when_configured(monkeypatch) -> None:
+    calls: list[tuple[str, str, dict | None, dict[str, str] | None]] = []
+
+    def fake_call_json_api(method: str, url: str, *, payload=None, headers=None):
+        calls.append((method, url, payload, headers))
+        return {
+            "data": {
+                "fields": [
+                    "canonical_name",
+                    "display_name",
+                    "aliases",
+                    "max_confidence",
+                    "observation_count",
+                ],
+                "values": [["josh", "Josh", ["Josh"], 0.92, 3]],
+            }
+        }
+
+    monkeypatch.setattr("midas.core.projections.call_json_api", fake_call_json_api)
+
+    projector = GraphProjector(
+        query_api_url="https://example.databases.neo4j.io",
+        database="neo4j",
+        username="neo4j",
+        password="secret-password",
+    )
+    rows = projector.list_entities("user-1", "person")
+
+    assert rows[0]["canonical_name"] == "josh"
+    assert calls[0][1] == "https://example.databases.neo4j.io/db/neo4j/query/v2"
+    assert calls[0][2] == {
+        "statement": """
+                MATCH (e:Entity {user_id: $user_id, entity_type: $entity_type})
+                RETURN e.canonical_name AS canonical_name,
+                       e.display_name AS display_name,
+                       coalesce(e.aliases, []) AS aliases,
+                       coalesce(e.max_confidence, 0.0) AS max_confidence,
+                       coalesce(e.observation_count, 0) AS observation_count
+                ORDER BY observation_count DESC, max_confidence DESC
+                LIMIT 200
+                """,
+        "parameters": {"user_id": "user-1", "entity_type": "person"},
+    }
+    assert calls[0][3] and calls[0][3]["Authorization"].startswith("Basic ")
+
+
 def test_auth_delete_data_clears_account_data_but_keeps_account(monkeypatch) -> None:
     owner_token = register_and_login()
     viewer_token = client.post(

@@ -209,6 +209,10 @@ Important variables:
   - Leave this empty for the local anonymous Docker service.
 - `NEO4J_HTTP_URL`, `NEO4J_USERNAME`, `NEO4J_PASSWORD`
   - Tells the backend how to write graph memory into Neo4j.
+- `NEO4J_QUERY_API_URL`, `NEO4J_DATABASE`
+  - Optional Aura-compatible Neo4j Query API base URL and database name.
+  - If `NEO4J_QUERY_API_URL` is set, the backend uses the managed Query API path instead of the local `/tx/commit` HTTP endpoint.
+  - Leave these unset for the local Docker Neo4j service.
 - `MIDAS_AUTO_PROJECT`
   - `1` means every new reflection/journal entry will automatically project into Weaviate and Neo4j.
   - `0` means entries are stored first and projection jobs must be run later.

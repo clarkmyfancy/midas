@@ -1696,8 +1696,17 @@ def extract_graph(entry: JournalEntryRecord) -> GraphExtraction:
 
 
 class GraphProjector:
-    def __init__(self, base_url: str | None = None, username: str | None = None, password: str | None = None) -> None:
+    def __init__(
+        self,
+        base_url: str | None = None,
+        username: str | None = None,
+        password: str | None = None,
+        query_api_url: str | None = None,
+        database: str | None = None,
+    ) -> None:
         self.base_url = (base_url or os.getenv("NEO4J_HTTP_URL") or "http://127.0.0.1:7474").rstrip("/")
+        self.query_api_url = (query_api_url or os.getenv("NEO4J_QUERY_API_URL") or "").rstrip("/")
+        self.database = (database or os.getenv("NEO4J_DATABASE") or "neo4j").strip() or "neo4j"
         self.username = username or os.getenv("NEO4J_USERNAME") or "neo4j"
         self.password = resolve_neo4j_password(password)
 
@@ -1705,7 +1714,10 @@ class GraphProjector:
         token = b64encode(f"{self.username}:{self.password}".encode("utf-8")).decode("utf-8")
         return {"Authorization": f"Basic {token}"}
 
-    def _query(self, statement: str, parameters: dict[str, Any] | None = None) -> dict[str, Any]:
+    def _use_query_api(self) -> bool:
+        return bool(self.query_api_url)
+
+    def _legacy_query(self, statement: str, parameters: dict[str, Any] | None = None) -> dict[str, Any]:
         return call_json_api(
             "POST",
             f"{self.base_url}/db/neo4j/tx/commit",
@@ -1721,11 +1733,44 @@ class GraphProjector:
             headers=self._headers(),
         )
 
+    def _query(self, statement: str, parameters: dict[str, Any] | None = None) -> dict[str, Any]:
+        if self._use_query_api():
+            return {
+                "data": {
+                    "values": self._query_api_rows(statement, parameters),
+                }
+            }
+        return self._legacy_query(statement, parameters)
+
+    def _query_api_rows(self, statement: str, parameters: dict[str, Any] | None = None) -> list[list[Any]]:
+        result = call_json_api(
+            "POST",
+            f"{self.query_api_url}/db/{self.database}/query/v2",
+            payload={
+                "statement": statement,
+                "parameters": parameters or {},
+            },
+            headers=self._headers(),
+        )
+        data = result.get("data", {})
+        values = data.get("values", [])
+        return [list(row) if isinstance(row, list) else [row] for row in values]
+
+    def _legacy_query_rows(self, statement: str, parameters: dict[str, Any] | None = None) -> list[list[Any]]:
+        result = self._query(statement, parameters)
+        rows = result.get("results", [{}])[0].get("data", [])
+        return [list(row.get("row", [])) for row in rows]
+
+    def _query_rows(self, statement: str, parameters: dict[str, Any] | None = None) -> list[list[Any]]:
+        if self._use_query_api():
+            return self._query_api_rows(statement, parameters)
+        return self._legacy_query_rows(statement, parameters)
+
     def ensure_schema(self) -> None:
-        self._query(
+        self._query_rows(
             "CREATE CONSTRAINT observation_id IF NOT EXISTS FOR (o:Observation) REQUIRE o.id IS UNIQUE"
         )
-        self._query(
+        self._query_rows(
             "CREATE CONSTRAINT entity_key IF NOT EXISTS FOR (e:Entity) REQUIRE e.entity_key IS UNIQUE"
         )
 
@@ -1734,7 +1779,7 @@ class GraphProjector:
 
     def list_entities(self, user_id: str, entity_type: str) -> list[dict[str, Any]]:
         try:
-            result = self._query(
+            rows = self._query_rows(
                 """
                 MATCH (e:Entity {user_id: $user_id, entity_type: $entity_type})
                 RETURN e.canonical_name AS canonical_name,
@@ -1749,8 +1794,16 @@ class GraphProjector:
             )
         except RuntimeError:
             return []
-        rows = result.get("results", [{}])[0].get("data", [])
-        return [dict(zip(("canonical_name", "display_name", "aliases", "max_confidence", "observation_count"), row.get("row", []), strict=False)) for row in rows]
+        return [
+            dict(
+                zip(
+                    ("canonical_name", "display_name", "aliases", "max_confidence", "observation_count"),
+                    row,
+                    strict=False,
+                )
+            )
+            for row in rows
+        ]
 
     def list_source_record_ids_for_entity(
         self,
@@ -1760,7 +1813,7 @@ class GraphProjector:
         canonical_name: str,
     ) -> list[str]:
         try:
-            result = self._query(
+            rows = self._query_rows(
                 """
                 MATCH (o:Observation {user_id: $user_id})-[:OBSERVED]->(e:Entity {user_id: $user_id, entity_type: $entity_type, canonical_name: $canonical_name})
                 RETURN DISTINCT o.source_record_id AS source_record_id
@@ -1774,12 +1827,10 @@ class GraphProjector:
             )
         except RuntimeError:
             return []
-        rows = result.get("results", [{}])[0].get("data", [])
         source_record_ids: list[str] = []
         for row in rows:
-            values = row.get("row", [])
-            if values and values[0]:
-                source_record_ids.append(str(values[0]))
+            if row and row[0]:
+                source_record_ids.append(str(row[0]))
         return source_record_ids
 
     def _prepare_entity_for_storage(
@@ -1974,7 +2025,7 @@ class GraphProjector:
 
         self.ensure_schema()
         observation_id = job.id
-        self._query(
+        self._query_rows(
             """
             MERGE (o:Observation {id: $observation_id})
             SET o.user_id = $user_id,
@@ -2002,7 +2053,7 @@ class GraphProjector:
             label = GRAPH_ENTITY_LABELS.get(entity.entity_type, "Entity")
             entity_key = f"{entry.user_id}:{entity.entity_type}:{entity.canonical_name}"
             known_entities[entity.canonical_name] = {"label": label, "key": entity_key}
-            self._query(
+            self._query_rows(
                 f"""
                 MERGE (e:Entity:{label} {{entity_key: $entity_key}})
                 SET e.user_id = $user_id,
@@ -2066,7 +2117,7 @@ class GraphProjector:
                 if relation.target_canonical_name == "observation"
                 else "entity_key"
             )
-            self._query(
+            self._query_rows(
                 f"""
                 MATCH (source {{{source_match_field}: $source_key}})
                 MATCH (target {{{target_match_field}: $target_key}})
@@ -2091,21 +2142,20 @@ class GraphProjector:
             )
 
     def delete_observation(self, source_record_id: str, user_id: str) -> GraphCleanupResult:
-        result = self._query(
+        rows = self._query_rows(
             """
             MATCH (o:Observation {source_record_id: $source_record_id, user_id: $user_id})
             RETURN collect(o.id) AS observation_ids
             """,
             {"source_record_id": source_record_id, "user_id": user_id},
         )
-        rows = result.get("results", [{}])[0].get("data", [])
         if not rows:
             return GraphCleanupResult(
                 deleted_observation_ids=[],
                 deleted_relationships=0,
                 deleted_entities=0,
             )
-        observation_ids = rows[0].get("row", [[]])[0]
+        observation_ids = rows[0][0]
         if not observation_ids:
             return GraphCleanupResult(
                 deleted_observation_ids=[],
@@ -2113,7 +2163,7 @@ class GraphProjector:
                 deleted_entities=0,
             )
 
-        deleted_relationships_result = self._query(
+        deleted_relationship_rows = self._query_rows(
             """
             MATCH ()-[r]-()
             WHERE r.source_record_id = $source_record_id OR r.observation_id IN $observation_ids
@@ -2127,11 +2177,10 @@ class GraphProjector:
             },
         )
         deleted_relationships = 0
-        deleted_relationship_rows = deleted_relationships_result.get("results", [{}])[0].get("data", [])
         if deleted_relationship_rows:
-            deleted_relationships = int(deleted_relationship_rows[0].get("row", [0])[0])
+            deleted_relationships = int(deleted_relationship_rows[0][0])
 
-        self._query(
+        self._query_rows(
             """
             MATCH (o:Observation {source_record_id: $source_record_id, user_id: $user_id})
             DETACH DELETE o
@@ -2139,7 +2188,7 @@ class GraphProjector:
             {"source_record_id": source_record_id, "user_id": user_id},
         )
 
-        deleted_entities_result = self._query(
+        deleted_entity_rows = self._query_rows(
             """
             MATCH (e:Entity {user_id: $user_id})
             WHERE NOT (e)--()
@@ -2150,9 +2199,8 @@ class GraphProjector:
             {"user_id": user_id},
         )
         deleted_entities = 0
-        deleted_entity_rows = deleted_entities_result.get("results", [{}])[0].get("data", [])
         if deleted_entity_rows:
-            deleted_entities = int(deleted_entity_rows[0].get("row", [0])[0])
+            deleted_entities = int(deleted_entity_rows[0][0])
 
         return GraphCleanupResult(
             deleted_observation_ids=[str(item) for item in observation_ids],
@@ -2161,7 +2209,7 @@ class GraphProjector:
         )
 
     def delete_user_data(self, user_id: str) -> GraphUserCleanupResult:
-        result = self._query(
+        rows = self._query_rows(
             """
             OPTIONAL MATCH (n {user_id: $user_id})
             OPTIONAL MATCH (n)-[r]-()
@@ -2176,14 +2224,13 @@ class GraphProjector:
             """,
             {"user_id": user_id},
         )
-        rows = result.get("results", [{}])[0].get("data", [])
         if not rows:
             return GraphUserCleanupResult(
                 deleted_observations=0,
                 deleted_entities=0,
                 deleted_relationships=0,
             )
-        deleted_observations, deleted_entities, deleted_relationships = rows[0].get("row", [0, 0, 0])
+        deleted_observations, deleted_entities, deleted_relationships = rows[0]
         return GraphUserCleanupResult(
             deleted_observations=int(deleted_observations),
             deleted_entities=int(deleted_entities),
@@ -2191,7 +2238,7 @@ class GraphProjector:
         )
 
     def delete_local_data(self) -> GraphLocalCleanupResult:
-        result = self._query(
+        rows = self._query_rows(
             """
             OPTIONAL MATCH (n)
             WHERE 'Observation' IN labels(n) OR 'Entity' IN labels(n)
@@ -2206,14 +2253,13 @@ class GraphProjector:
             RETURN deleted_observations, deleted_entities, deleted_relationships
             """
         )
-        rows = result.get("results", [{}])[0].get("data", [])
         if not rows:
             return GraphLocalCleanupResult(
                 deleted_observations=0,
                 deleted_entities=0,
                 deleted_relationships=0,
             )
-        deleted_observations, deleted_entities, deleted_relationships = rows[0].get("row", [0, 0, 0])
+        deleted_observations, deleted_entities, deleted_relationships = rows[0]
         return GraphLocalCleanupResult(
             deleted_observations=int(deleted_observations),
             deleted_entities=int(deleted_entities),
@@ -2221,38 +2267,42 @@ class GraphProjector:
         )
 
     def fetch_observation(self, source_record_id: str, user_id: str) -> dict[str, Any]:
-        result = self._query(
+        rows = self._query_rows(
             """
             MATCH (o:Observation {source_record_id: $source_record_id, user_id: $user_id})
             OPTIONAL MATCH (o)-[r]-(n)
-            RETURN o,
-                   collect(DISTINCT n) AS nodes,
-                   collect(DISTINCT r) AS relationships
+            RETURN {
+                     id: elementId(o),
+                     labels: labels(o),
+                     properties: properties(o)
+                   } AS observation,
+                   [node IN collect(DISTINCT n) WHERE node IS NOT NULL | {
+                     id: elementId(node),
+                     labels: labels(node),
+                     properties: properties(node)
+                   }] AS nodes,
+                   [relationship IN collect(DISTINCT r) WHERE relationship IS NOT NULL | {
+                     id: elementId(relationship),
+                     type: type(relationship),
+                     startNode: elementId(startNode(relationship)),
+                     endNode: elementId(endNode(relationship)),
+                     properties: properties(relationship)
+                   }] AS relationships
             """,
             {"source_record_id": source_record_id, "user_id": user_id},
         )
-        results = result.get("results", [])
-        if not results:
+        if not rows:
             return {"observation": None, "nodes": [], "relationships": []}
-        data = results[0].get("data", [])
-        if not data:
-            return {"observation": None, "nodes": [], "relationships": []}
-        graph = data[0].get("graph", {})
-        nodes = graph.get("nodes", [])
-        relationships = graph.get("relationships", [])
-        observation = None
-        for node in nodes:
-            labels = node.get("labels", [])
-            if "Observation" in labels:
-                observation = node
-                break
+        observation, nodes, relationships = rows[0]
         return {
             "observation": observation,
-            "nodes": nodes,
-            "relationships": relationships,
+            "nodes": nodes or [],
+            "relationships": relationships or [],
         }
 
     def browser_url(self) -> str:
+        if self._use_query_api():
+            return self.query_api_url
         return urljoin(f"{self.base_url}/", "browser/")
 
 
