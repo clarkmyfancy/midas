@@ -100,6 +100,10 @@ from midas.core.memory import (
     replace_chat_message_for_user,
     resolve_clarification_task_for_user,
     update_chat_thread_title_for_user,
+    enabled_projection_types_for_auto_run,
+    is_auto_projection_enabled,
+    is_neo4j_auto_projection_enabled,
+    is_weaviate_auto_projection_enabled,
 )
 from midas.core.projections import (
     GraphProjector,
@@ -116,7 +120,9 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def app_lifespan(_: FastAPI):
     try:
-        process_pending_projection_jobs(limit=100)
+        projection_types = enabled_projection_types_for_auto_run()
+        if projection_types:
+            process_pending_projection_jobs(limit=100, projection_types=projection_types)
     except Exception:
         logger.exception("Unable to process pending projection jobs during startup")
     yield
@@ -242,7 +248,9 @@ def build_memory_links() -> dict[str, str]:
 
 def get_memory_settings() -> MemorySettingsResponse:
     return MemorySettingsResponse(
-        auto_project_enabled=os.getenv("MIDAS_AUTO_PROJECT", "0") == "1",
+        auto_project_enabled=is_auto_projection_enabled(),
+        auto_project_weaviate_enabled=is_weaviate_auto_projection_enabled(),
+        auto_project_neo4j_enabled=is_neo4j_auto_projection_enabled(),
     )
 
 
@@ -650,7 +658,7 @@ async def create_reflection(
     user: Annotated[AuthUser, Depends(get_current_user)],
 ) -> StreamingResponse:
     thread_id = payload.thread_id or str(uuid4())
-    stored_entry, _ = create_journal_entry_for_user(
+    stored_entry, projection_jobs = create_journal_entry_for_user(
         user_id=user.id,
         journal_entry=payload.journal_entry,
         goals=payload.goals,
@@ -696,8 +704,9 @@ async def create_reflection(
                 thread_id=thread_id,
                 title=generate_chat_thread_title(payload.journal_entry, assistant_content),
             )
-    if os.getenv("MIDAS_AUTO_PROJECT", "0") == "1":
-        process_pending_projection_jobs(limit=10, user_id=user.id)
+    auto_projection_types = enabled_projection_types_for_auto_run()
+    if projection_jobs and auto_projection_types:
+        process_pending_projection_jobs(limit=10, user_id=user.id, projection_types=auto_projection_types)
     return StreamingResponse(
         stream_reflection_events(resolved_payload, on_complete=persist_assistant_reply),
         media_type="text/event-stream",
@@ -723,8 +732,14 @@ def create_journal_entry(
         hrv_ms=payload.hrv_ms,
         source=payload.source,
     )
-    if os.getenv("MIDAS_AUTO_PROJECT", "0") == "1":
-        background_tasks.add_task(process_pending_projection_jobs, limit=10, user_id=user.id)
+    auto_projection_types = enabled_projection_types_for_auto_run()
+    if projection_jobs and auto_projection_types:
+        background_tasks.add_task(
+            process_pending_projection_jobs,
+            limit=10,
+            user_id=user.id,
+            projection_types=auto_projection_types,
+        )
     return JournalIngestResponse(
         entry=serialize_journal_entry(entry),
         projection_jobs=[serialize_projection_job(job) for job in projection_jobs],

@@ -17,16 +17,76 @@ WEAVIATE_RAW_JOURNAL_PROJECTION = "weaviate_raw_journal_entry"
 WEAVIATE_SEMANTIC_SUMMARY_PROJECTION = "weaviate_semantic_summary"
 LEGACY_WEAVIATE_RAW_JOURNAL_PROJECTION = "weaviate_journal_memory"
 LEGACY_WEAVIATE_SEMANTIC_SUMMARY_PROJECTION = "weaviate_episode_summary"
-PROJECTION_TYPES = (
+WEAVIATE_PROJECTION_TYPES = (
     WEAVIATE_RAW_JOURNAL_PROJECTION,
     WEAVIATE_SEMANTIC_SUMMARY_PROJECTION,
-    "neo4j_knowledge_graph",
+)
+NEO4J_KNOWLEDGE_GRAPH_PROJECTION = "neo4j_knowledge_graph"
+NEO4J_PROJECTION_TYPES = (NEO4J_KNOWLEDGE_GRAPH_PROJECTION,)
+PROJECTION_TYPES = (
+    *WEAVIATE_PROJECTION_TYPES,
+    *NEO4J_PROJECTION_TYPES,
 )
 CLARIFICATION_RESOLUTIONS = (
     "confirm_merge",
     "keep_separate",
     "dismiss",
 )
+TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
+FALSE_ENV_VALUES = {"0", "false", "no", "off"}
+
+
+def parse_optional_bool_env(name: str) -> bool | None:
+    raw = os.getenv(name)
+    if raw is None:
+        return None
+
+    normalized = raw.strip().lower()
+    if not normalized:
+        return None
+    if normalized in TRUE_ENV_VALUES:
+        return True
+    if normalized in FALSE_ENV_VALUES:
+        return False
+    return None
+
+
+def legacy_auto_projection_enabled() -> bool:
+    return parse_optional_bool_env("MIDAS_AUTO_PROJECT") is True
+
+
+def is_weaviate_auto_projection_enabled() -> bool:
+    explicit = parse_optional_bool_env("MIDAS_AUTO_PROJECT_WEAVIATE")
+    if explicit is not None:
+        return explicit
+    return legacy_auto_projection_enabled()
+
+
+def is_neo4j_auto_projection_enabled() -> bool:
+    explicit = parse_optional_bool_env("MIDAS_AUTO_PROJECT_NEO4J")
+    if explicit is not None:
+        return explicit
+    return legacy_auto_projection_enabled()
+
+
+def is_auto_projection_enabled() -> bool:
+    return is_weaviate_auto_projection_enabled() or is_neo4j_auto_projection_enabled()
+
+
+def is_projection_type_enabled_for_auto_run(projection_type: str) -> bool:
+    if projection_type in WEAVIATE_PROJECTION_TYPES:
+        return is_weaviate_auto_projection_enabled()
+    if projection_type in NEO4J_PROJECTION_TYPES:
+        return is_neo4j_auto_projection_enabled()
+    return False
+
+
+def enabled_projection_types_for_auto_run() -> tuple[str, ...]:
+    return tuple(
+        projection_type
+        for projection_type in PROJECTION_TYPES
+        if is_projection_type_enabled_for_auto_run(projection_type)
+    )
 
 
 def allows_in_memory_storage() -> bool:
@@ -194,6 +254,7 @@ class MemoryStore:
         *,
         limit: int,
         user_id: str | None = None,
+        projection_types: tuple[str, ...] | None = None,
     ) -> list[ProjectionJobRecord]:
         raise NotImplementedError
 
@@ -757,12 +818,15 @@ class MemoryMemoryStore(MemoryStore):
         *,
         limit: int,
         user_id: str | None = None,
+        projection_types: tuple[str, ...] | None = None,
     ) -> list[ProjectionJobRecord]:
         with self._lock:
             jobs = list(self._jobs_by_id.values())
 
         if user_id is not None:
             jobs = [job for job in jobs if job.user_id == user_id]
+        if projection_types is not None:
+            jobs = [job for job in jobs if job.projection_type in projection_types]
 
         pending = [job for job in jobs if job.status == "pending"]
         pending.sort(key=lambda item: item.created_at)
@@ -1548,6 +1612,7 @@ class PostgresMemoryStore(MemoryStore):
         *,
         limit: int,
         user_id: str | None = None,
+        projection_types: tuple[str, ...] | None = None,
     ) -> list[ProjectionJobRecord]:
         query = (
             """
@@ -1560,6 +1625,9 @@ class PostgresMemoryStore(MemoryStore):
         if user_id is not None:
             query += " AND user_id = %s"
             params.append(user_id)
+        if projection_types:
+            query += " AND projection_type = ANY(%s)"
+            params.append(list(projection_types))
         query += " ORDER BY created_at ASC LIMIT %s"
         params.append(limit)
 
@@ -2150,8 +2218,13 @@ def list_pending_projection_jobs(
     *,
     limit: int,
     user_id: str | None = None,
+    projection_types: tuple[str, ...] | None = None,
 ) -> list[ProjectionJobRecord]:
-    return get_memory_store().list_pending_projection_jobs(limit=limit, user_id=user_id)
+    return get_memory_store().list_pending_projection_jobs(
+        limit=limit,
+        user_id=user_id,
+        projection_types=projection_types,
+    )
 
 
 def mark_projection_job_completed(job_id: str) -> ProjectionJobRecord:

@@ -208,6 +208,8 @@ export interface MemoryDebugResponse {
 
 export interface MemorySettingsResponse {
   auto_project_enabled: boolean;
+  auto_project_weaviate_enabled: boolean;
+  auto_project_neo4j_enabled: boolean;
 }
 
 export interface ProjectionJobListResponse {

@@ -209,6 +209,10 @@ Important variables:
 - `MIDAS_AUTO_PROJECT`
   - `1` means every new reflection/journal entry will automatically project into Weaviate and Neo4j.
   - `0` means entries are stored first and projection jobs must be run later.
+- `MIDAS_AUTO_PROJECT_WEAVIATE`, `MIDAS_AUTO_PROJECT_NEO4J`
+  - Optional per-store overrides for automatic projection behavior.
+  - If unset, both inherit from `MIDAS_AUTO_PROJECT`.
+  - This keeps local behavior unchanged while allowing production to auto-run Weaviate and Neo4j independently.
 
 If you want live model output, add your key:
 

@@ -76,6 +76,8 @@ class ProjectionRunResponse(BaseModel):
 
 class MemorySettingsResponse(BaseModel):
     auto_project_enabled: bool
+    auto_project_weaviate_enabled: bool
+    auto_project_neo4j_enabled: bool
 
 
 class ClarificationTaskResponse(BaseModel):

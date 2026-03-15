@@ -210,6 +210,10 @@ export function MemoryPageShell() {
           <div className="memory-settings-chip">
             Auto project: {settings?.auto_project_enabled ? "on" : "off"}
           </div>
+          <p className="memory-small-copy">
+            Weaviate auto-run: {settings?.auto_project_weaviate_enabled ? "on" : "off"} | Neo4j auto-run:{" "}
+            {settings?.auto_project_neo4j_enabled ? "on" : "off"}
+          </p>
 
           <label className="label">
             Journal entry
@@ -258,6 +262,10 @@ export function MemoryPageShell() {
           <p>Use these while the stack is running locally.</p>
           <p className="memory-small-copy">
             Current local mode: {settings?.auto_project_enabled ? "entries auto-project on write" : "manual projection run required"}
+          </p>
+          <p className="memory-small-copy">
+            Automatic targets: {settings?.auto_project_weaviate_enabled ? "Weaviate on" : "Weaviate off"} /{" "}
+            {settings?.auto_project_neo4j_enabled ? "Neo4j on" : "Neo4j off"}
           </p>
           <div className="memory-link-list">
             <a className="link-button" href="http://localhost:7474/browser/" rel="noreferrer" target="_blank">

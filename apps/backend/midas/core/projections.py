@@ -2235,8 +2235,13 @@ def serialize_neo4j_value(value: Any) -> Any:
     return value
 
 
-def process_pending_projection_jobs(*, limit: int = 10, user_id: str | None = None) -> ProjectionRunResult:
-    jobs = list_pending_projection_jobs(limit=limit, user_id=user_id)
+def process_pending_projection_jobs(
+    *,
+    limit: int = 10,
+    user_id: str | None = None,
+    projection_types: tuple[str, ...] | None = None,
+) -> ProjectionRunResult:
+    jobs = list_pending_projection_jobs(limit=limit, user_id=user_id, projection_types=projection_types)
     completed: list[ProjectionJobRecord] = []
     failed: list[ProjectionJobRecord] = []
     weaviate = WeaviateProjector()
