@@ -29,6 +29,24 @@ CLARIFICATION_RESOLUTIONS = (
 )
 
 
+def allows_in_memory_storage() -> bool:
+    environment = os.getenv("MIDAS_ENV") or os.getenv("NODE_ENV") or "development"
+    return environment.strip().lower() in {"dev", "development", "local", "test", "testing"}
+
+
+def require_postgres_storage(component_name: str) -> str | None:
+    db_uri = os.getenv("POSTGRES_URI")
+    if db_uri:
+        if psycopg is None:
+            raise RuntimeError(f"{component_name} requires psycopg when POSTGRES_URI is configured")
+        return db_uri
+
+    if allows_in_memory_storage():
+        return None
+
+    raise RuntimeError(f"{component_name} requires POSTGRES_URI outside development and test")
+
+
 @dataclass(frozen=True)
 class JournalEntryRecord:
     id: str
@@ -2056,8 +2074,8 @@ def get_memory_store() -> MemoryStore:
         if _store is not None:
             return _store
 
-        db_uri = os.getenv("POSTGRES_URI")
-        if db_uri and psycopg is not None:
+        db_uri = require_postgres_storage("Memory storage")
+        if db_uri is not None:
             store: MemoryStore = PostgresMemoryStore(db_uri)
         else:
             store = MemoryMemoryStore()
@@ -2298,5 +2316,4 @@ def reset_memory_storage_for_tests() -> None:
     global _store
     if isinstance(_store, MemoryMemoryStore):
         _store.reset()
-    else:
-        _store = None
+    _store = None

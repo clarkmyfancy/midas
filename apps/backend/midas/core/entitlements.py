@@ -48,6 +48,24 @@ class RefreshSessionRecord:
     revoked_at: datetime | None
 
 
+def allows_in_memory_storage() -> bool:
+    environment = os.getenv("MIDAS_ENV") or os.getenv("NODE_ENV") or "development"
+    return environment.strip().lower() in {"dev", "development", "local", "test", "testing"}
+
+
+def require_postgres_storage(component_name: str) -> str | None:
+    db_uri = os.getenv("POSTGRES_URI")
+    if db_uri:
+        if psycopg is None:
+            raise RuntimeError(f"{component_name} requires psycopg when POSTGRES_URI is configured")
+        return db_uri
+
+    if allows_in_memory_storage():
+        return None
+
+    raise RuntimeError(f"{component_name} requires POSTGRES_URI outside development and test")
+
+
 class AuthStore:
     def setup(self) -> None:
         raise NotImplementedError
@@ -569,8 +587,8 @@ def get_auth_store() -> AuthStore:
         if _store is not None:
             return _store
 
-        db_uri = os.getenv("POSTGRES_URI")
-        if db_uri and psycopg is not None:
+        db_uri = require_postgres_storage("Auth storage")
+        if db_uri is not None:
             store: AuthStore = PostgresAuthStore(db_uri)
         else:
             store = MemoryAuthStore()
@@ -590,8 +608,8 @@ def get_refresh_session_store() -> RefreshSessionStore:
         if _refresh_store is not None:
             return _refresh_store
 
-        db_uri = os.getenv("POSTGRES_URI")
-        if db_uri and psycopg is not None:
+        db_uri = require_postgres_storage("Refresh session storage")
+        if db_uri is not None:
             store: RefreshSessionStore = PostgresRefreshSessionStore(db_uri)
         else:
             store = MemoryRefreshSessionStore()
@@ -701,9 +719,7 @@ def reset_auth_storage_for_tests() -> None:
     global _store, _refresh_store
     if isinstance(_store, MemoryAuthStore):
         _store.reset()
-    else:
-        _store = None
     if isinstance(_refresh_store, MemoryRefreshSessionStore):
         _refresh_store.reset()
-    else:
-        _refresh_store = None
+    _store = None
+    _refresh_store = None

@@ -1,7 +1,12 @@
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from midas.core import entitlements as entitlements_module
 from midas.core.loader import load_capabilities
+from midas.core.memory import init_memory_storage, reset_memory_storage_for_tests
+from midas.core.entitlements import init_auth_storage, reset_auth_storage_for_tests
+from midas.core import memory as memory_module
 from midas.core.projections import (
     GraphLocalCleanupResult,
     GraphUserCleanupResult,
@@ -92,6 +97,44 @@ def test_auth_me_returns_current_user() -> None:
 
     assert response.status_code == 200
     assert response.json()["email"] == "user@example.com"
+
+
+def test_auth_storage_requires_postgres_outside_development(monkeypatch) -> None:
+    reset_auth_storage_for_tests()
+    monkeypatch.setenv("MIDAS_ENV", "production")
+    monkeypatch.delenv("POSTGRES_URI", raising=False)
+
+    with pytest.raises(RuntimeError, match="POSTGRES_URI"):
+        init_auth_storage()
+
+
+def test_auth_storage_requires_psycopg_when_postgres_is_configured(monkeypatch) -> None:
+    reset_auth_storage_for_tests()
+    monkeypatch.setenv("MIDAS_ENV", "production")
+    monkeypatch.setenv("POSTGRES_URI", "postgresql://midas:midas@localhost:5432/midas")
+    monkeypatch.setattr(entitlements_module, "psycopg", None)
+
+    with pytest.raises(RuntimeError, match="psycopg"):
+        init_auth_storage()
+
+
+def test_memory_storage_requires_postgres_outside_development(monkeypatch) -> None:
+    reset_memory_storage_for_tests()
+    monkeypatch.setenv("MIDAS_ENV", "production")
+    monkeypatch.delenv("POSTGRES_URI", raising=False)
+
+    with pytest.raises(RuntimeError, match="POSTGRES_URI"):
+        init_memory_storage()
+
+
+def test_memory_storage_requires_psycopg_when_postgres_is_configured(monkeypatch) -> None:
+    reset_memory_storage_for_tests()
+    monkeypatch.setenv("MIDAS_ENV", "production")
+    monkeypatch.setenv("POSTGRES_URI", "postgresql://midas:midas@localhost:5432/midas")
+    monkeypatch.setattr(memory_module, "psycopg", None)
+
+    with pytest.raises(RuntimeError, match="psycopg"):
+        init_memory_storage()
 
 
 def test_auth_delete_data_clears_account_data_but_keeps_account(monkeypatch) -> None:
@@ -247,8 +290,8 @@ def test_dev_local_data_wipe_clears_all_memory_data_but_keeps_accounts(monkeypat
 
 
 def test_dev_local_data_wipe_is_hidden_in_production(monkeypatch) -> None:
-    monkeypatch.setenv("MIDAS_ENV", "production")
     access_token = register_and_login()
+    monkeypatch.setenv("MIDAS_ENV", "production")
 
     response = client.delete(
         "/v1/dev/local-data",
