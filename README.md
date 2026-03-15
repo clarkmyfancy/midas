@@ -204,6 +204,9 @@ Important variables:
   - Tells the backend how to connect to the local Postgres container.
 - `WEAVIATE_URL`
   - Tells the backend where the local Weaviate service lives.
+- `WEAVIATE_API_KEY`
+  - Optional authentication token for hosted Weaviate environments such as Cloud or Sandbox.
+  - Leave this empty for the local anonymous Docker service.
 - `NEO4J_HTTP_URL`, `NEO4J_USERNAME`, `NEO4J_PASSWORD`
   - Tells the backend how to write graph memory into Neo4j.
 - `MIDAS_AUTO_PROJECT`

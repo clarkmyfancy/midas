@@ -934,12 +934,23 @@ def call_json_api(
     return json.loads(content) if content else {}
 
 
+def weaviate_request_headers(api_key: str | None = None) -> dict[str, str]:
+    resolved_api_key = (api_key or os.getenv("WEAVIATE_API_KEY") or "").strip()
+    if not resolved_api_key:
+        return {}
+    return {"Authorization": f"Bearer {resolved_api_key}"}
+
+
 class WeaviateProjector:
-    def __init__(self, base_url: str | None = None) -> None:
+    def __init__(self, base_url: str | None = None, api_key: str | None = None) -> None:
         self.base_url = (base_url or os.getenv("WEAVIATE_URL") or "http://127.0.0.1:8080").rstrip("/")
+        self.api_key = api_key
+
+    def _headers(self) -> dict[str, str]:
+        return weaviate_request_headers(self.api_key)
 
     def ensure_schema(self) -> None:
-        schema = call_json_api("GET", f"{self.base_url}/v1/schema")
+        schema = call_json_api("GET", f"{self.base_url}/v1/schema", headers=self._headers())
         classes_by_name = {
             str(item.get("class")): item for item in schema.get("classes", []) if item.get("class")
         }
@@ -953,6 +964,7 @@ class WeaviateProjector:
                     "vectorizer": "none",
                     "properties": WEAVIATE_CLASS_PROPERTIES,
                 },
+                headers=self._headers(),
             )
             return
 
@@ -968,6 +980,7 @@ class WeaviateProjector:
                 "POST",
                 f"{self.base_url}/v1/schema/{VECTOR_CLASS_NAME}/properties",
                 payload=property_definition,
+                headers=self._headers(),
             )
 
     def project(self, job: ProjectionJobRecord, entry: JournalEntryRecord) -> None:
@@ -985,11 +998,12 @@ class WeaviateProjector:
                 },
                 "vector": embed_text(embedding_text),
             },
+            headers=self._headers(),
         )
 
     def fetch_object(self, object_id: str) -> dict[str, Any] | None:
         try:
-            return call_json_api("GET", f"{self.base_url}/v1/objects/{object_id}")
+            return call_json_api("GET", f"{self.base_url}/v1/objects/{object_id}", headers=self._headers())
         except RuntimeError:
             return None
 
@@ -997,7 +1011,7 @@ class WeaviateProjector:
         deleted_object_ids: list[str] = []
         for object_id in object_ids:
             try:
-                call_json_api("DELETE", f"{self.base_url}/v1/objects/{object_id}")
+                call_json_api("DELETE", f"{self.base_url}/v1/objects/{object_id}", headers=self._headers())
             except RuntimeError as exc:
                 if "404" in str(exc):
                     continue
@@ -1006,11 +1020,11 @@ class WeaviateProjector:
         return WeaviateCleanupResult(deleted_object_ids=deleted_object_ids)
 
     def delete_local_data(self) -> WeaviateLocalCleanupResult:
-        schema = call_json_api("GET", f"{self.base_url}/v1/schema")
+        schema = call_json_api("GET", f"{self.base_url}/v1/schema", headers=self._headers())
         classes = {item.get("class") for item in schema.get("classes", [])}
         if VECTOR_CLASS_NAME not in classes:
             return WeaviateLocalCleanupResult(deleted_class=False)
-        call_json_api("DELETE", f"{self.base_url}/v1/schema/{VECTOR_CLASS_NAME}")
+        call_json_api("DELETE", f"{self.base_url}/v1/schema/{VECTOR_CLASS_NAME}", headers=self._headers())
         return WeaviateLocalCleanupResult(deleted_class=True)
 
     def object_url(self, object_id: str) -> str:

@@ -10,6 +10,7 @@ from midas.core.projections import (
     ExtractedRelationship,
     GraphExtraction,
     GraphProjector,
+    WeaviateProjector,
     WEAVIATE_CLASS_PROPERTIES,
     build_weaviate_projection_payload,
     confidence_bucket_for_confidence,
@@ -84,6 +85,70 @@ def test_weaviate_schema_uses_date_and_filterable_metadata_defaults() -> None:
     assert properties_by_name["organizations"]["indexSearchable"] is False
     assert properties_by_name["content"]["indexSearchable"] is True
     assert properties_by_name["normalized_content"]["indexSearchable"] is True
+
+
+def test_weaviate_projector_uses_auth_headers_when_api_key_is_configured(monkeypatch) -> None:
+    store = MemoryMemoryStore()
+    entry, jobs = store.create_journal_entry(
+        user_id="user-1",
+        journal_entry="Ship the hosted vector path.",
+        goals=["Ship Midas"],
+        thread_id="cloud-weaviate",
+        steps=None,
+        sleep_hours=None,
+        hrv_ms=None,
+        source="manual",
+    )
+    job = next(job for job in jobs if job.projection_type == WEAVIATE_RAW_JOURNAL_PROJECTION)
+    projector = WeaviateProjector(base_url="https://example.weaviate.cloud", api_key="sandbox-key")
+
+    calls: list[tuple[str, str, dict | None, dict[str, str] | None]] = []
+
+    def fake_call_json_api(method: str, url: str, *, payload=None, headers=None):
+        calls.append((method, url, payload, headers))
+        if url.endswith("/v1/schema"):
+            return {"classes": []}
+        return {}
+
+    monkeypatch.setattr("midas.core.projections.call_json_api", fake_call_json_api)
+    monkeypatch.setattr("midas.core.projections.embed_text", lambda _text: [0.1, 0.2])
+
+    projector.project(job, entry)
+
+    assert len(calls) == 3
+    assert all(headers == {"Authorization": "Bearer sandbox-key"} for _method, _url, _payload, headers in calls)
+
+
+def test_weaviate_projector_omits_auth_headers_for_local_anonymous_mode(monkeypatch) -> None:
+    store = MemoryMemoryStore()
+    entry, jobs = store.create_journal_entry(
+        user_id="user-1",
+        journal_entry="Keep local mode simple.",
+        goals=[],
+        thread_id="local-weaviate",
+        steps=None,
+        sleep_hours=None,
+        hrv_ms=None,
+        source="manual",
+    )
+    job = next(job for job in jobs if job.projection_type == WEAVIATE_RAW_JOURNAL_PROJECTION)
+    projector = WeaviateProjector(base_url="http://127.0.0.1:8080")
+
+    calls: list[tuple[str, str, dict | None, dict[str, str] | None]] = []
+
+    def fake_call_json_api(method: str, url: str, *, payload=None, headers=None):
+        calls.append((method, url, payload, headers))
+        if url.endswith("/v1/schema"):
+            return {"classes": []}
+        return {}
+
+    monkeypatch.setattr("midas.core.projections.call_json_api", fake_call_json_api)
+    monkeypatch.setattr("midas.core.projections.embed_text", lambda _text: [0.1, 0.2])
+
+    projector.project(job, entry)
+
+    assert len(calls) == 3
+    assert all(headers == {} for _method, _url, _payload, headers in calls)
 
 
 def test_weaviate_projection_payload_filters_bad_person_and_project_candidates() -> None:

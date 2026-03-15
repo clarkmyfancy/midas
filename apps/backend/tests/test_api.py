@@ -15,6 +15,7 @@ from midas.core.projections import (
     WeaviateCleanupResult,
     WeaviateLocalCleanupResult,
     call_json_api,
+    weaviate_request_headers,
 )
 
 
@@ -185,6 +186,18 @@ def test_graph_projector_rejects_the_known_dev_password_outside_development(monk
 def test_external_store_http_access_is_blocked_during_tests() -> None:
     with pytest.raises(RuntimeError, match="disabled during tests"):
         call_json_api("GET", "http://127.0.0.1:8080/v1/schema")
+
+
+def test_weaviate_request_headers_omit_auth_when_api_key_missing(monkeypatch) -> None:
+    monkeypatch.delenv("WEAVIATE_API_KEY", raising=False)
+
+    assert weaviate_request_headers() == {}
+
+
+def test_weaviate_request_headers_use_bearer_token(monkeypatch) -> None:
+    monkeypatch.setenv("WEAVIATE_API_KEY", "sandbox-key")
+
+    assert weaviate_request_headers() == {"Authorization": "Bearer sandbox-key"}
 
 
 def test_auth_delete_data_clears_account_data_but_keeps_account(monkeypatch) -> None:
