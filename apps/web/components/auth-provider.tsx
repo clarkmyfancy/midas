@@ -15,14 +15,8 @@ import {
   type ReactNode,
 } from "react";
 
-import {
-  clearAuthSession,
-  getBrowserStorage,
-  loadAuthSession,
-  saveAuthSession,
-  type AuthSession,
-} from "../lib/auth-session";
-import { getCurrentUser, loginWithApi, registerWithApi } from "../lib/auth-api";
+import { type AuthSession } from "../lib/auth-session";
+import { loginWithApi, registerWithApi } from "../lib/auth-api";
 
 type AuthContextValue = {
   isReady: boolean;
@@ -40,48 +34,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isReady, setIsReady] = useState(false);
 
   useEffect(() => {
-    const storage = getBrowserStorage();
-    const storedSession = loadAuthSession(storage);
-
-    if (!storedSession) {
-      setIsReady(true);
-      return;
-    }
-
-    let cancelled = false;
-
-    void getCurrentUser(storedSession.accessToken)
-      .then((user) => {
-        if (cancelled) {
-          return;
-        }
-
-        const nextSession = { ...storedSession, user };
-        saveAuthSession(storage, nextSession);
-        startTransition(() => setSession(nextSession));
-      })
-      .catch(() => {
-        if (cancelled) {
-          return;
-        }
-
-        clearAuthSession(storage);
-        startTransition(() => setSession(null));
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setIsReady(true);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
+    setIsReady(true);
   }, []);
 
   async function persistSession(nextSession: AuthSession) {
-    const storage = getBrowserStorage();
-    saveAuthSession(storage, nextSession);
     startTransition(() => setSession(nextSession));
     return nextSession;
   }
@@ -97,8 +53,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   function logout() {
-    const storage = getBrowserStorage();
-    clearAuthSession(storage);
     startTransition(() => setSession(null));
   }
 
