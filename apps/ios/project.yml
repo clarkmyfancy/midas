@@ -8,6 +8,8 @@ targets:
     deploymentTarget: "17.0"
     sources:
       - path: Midas
+        excludes:
+          - Appicon.png
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.clarkmyfancy.midas
@@ -15,3 +17,4 @@ targets:
         PRODUCT_NAME: Midas
         INFOPLIST_FILE: Midas/Info.plist
         CODE_SIGN_ENTITLEMENTS: Midas/Midas.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
